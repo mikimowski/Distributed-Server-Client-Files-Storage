@@ -546,8 +546,8 @@ public:
 //        fetch("file1_server1");
 //
 //        upload("client_file");
-            search("file");
-//        discover();
+//        search("file");
+        discover();
     }
 
 
