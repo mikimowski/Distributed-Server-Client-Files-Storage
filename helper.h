@@ -8,9 +8,9 @@
 
 namespace const_variables { // TODO
     constexpr int max_command_len = 10;
-    constexpr int max_data_size = 3000; // 2^16 = IP packet has 16 bits, UDP provides datagram as a part of IP packet 65489
-    constexpr uint16_t simple_command_min_length = const_variables::max_command_len + sizeof(uint64_t);
-    constexpr uint16_t complex_command_min_length = const_variables::max_command_len + 2 * sizeof(uint64_t);
+    constexpr int max_data_size = 65489; // 2^16 = IP packet has 16 bits, UDP provides datagram as a part of IP packet 65489
+    constexpr uint16_t simple_message_no_data_size = const_variables::max_command_len + sizeof(uint64_t);
+    constexpr uint16_t complex_message_no_data_size = const_variables::max_command_len + 2 * sizeof(uint64_t);
     constexpr int random_seed = 0;
 }
 
@@ -101,11 +101,11 @@ struct __attribute__((__packed__)) SimpleMessage {
         strcpy(this->data, data);
     }
 
-    SimpleMessage(const ComplexMessage& message) {
-        strcpy(this->command, message.command);
-        this->message_seq = message.message_seq;
-        strcpy(this->data, message.data);
-    }
+//    SimpleMessage(const ComplexMessage& message) {
+//        strcpy(this->command, message.command);
+//        this->message_seq = message.message_seq;
+//        strcpy(this->data, message.data);
+//    }
 
     void init() {
         message_seq = 0;
@@ -135,6 +135,36 @@ struct __attribute__((__packed__)) SimpleMessage {
     }
 };
 
+/// Must be ended with '\0'
+/// TODO how about \n? :/
+bool is_correct_string(const char* str, uint64_t max_len) {
+    uint64_t i = 0;
+    while (i < max_len && str[i] != '\0')
+        i++;
 
+    while (i < max_len)
+        if (str[i++] != '\0')
+            return false;
+    return str[max_len - 1] == '\0';
+}
+
+bool is_correct_files_list(const char* str, uint64_t max_len) {
+    uint64_t i = 0;
+    while (i < max_len && str[i] != '\0')
+        i++;
+
+    while (i < max_len)
+        if (str[i++] != '\0')
+            return false;
+    return str[max_len - 1] == '\0' || str[max_len - 1] == '\n';
+}
+
+/**
+ * @return True if given pattern is a substring of given string,
+ *         false otherwise
+ */
+static bool is_substring(char const* pattern, const std::string_view& str) {
+    return str.find(pattern) != std::string::npos;
+}
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

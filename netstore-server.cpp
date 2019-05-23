@@ -115,7 +115,7 @@ ServerParameters parse_program_arguments(int argc, const char *argv[]) {
 class Server {
     const string mcast_addr;
     in_port_t cmd_port;
-    uint64_t used_space;
+    uint64_t used_space = 0;
     uint64_t max_available_space;
     const string shared_folder;
     const uint16_t timeout;
@@ -246,8 +246,12 @@ public:
             syserr("setsockopt");
     }
 
+    bool is_enough_space(uint64_t file_size) {
+        return file_size <= this->get_available_space();
+    }
+
     void send_message_udp(const SimpleMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
-        uint16_t message_length = const_variables::simple_command_min_length + data_length;
+        uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
             syserr("socket");
@@ -259,7 +263,7 @@ public:
     }
 
     void send_message_udp(const ComplexMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
-        uint16_t message_length = const_variables::complex_command_min_length + data_length;
+        uint16_t message_length = const_variables::complex_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
             syserr("socket");
@@ -270,66 +274,24 @@ public:
         cerr << "UDP command sent" << endl;
     }
 
-    void receive_message() {
-
-    }
-
     void discover_respond(struct sockaddr_in& destination_address, uint64_t message_seq) {
         struct ComplexMessage message{message_seq, cp::discover_response, this->mcast_addr.c_str(), htobe64(this->get_available_space())};
         cerr << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port) << endl;
+        cerr << "Message: " << endl;
+        cerr << message << endl;
         send_message_udp(message, destination_address, const_variables::max_command_len + 2 * sizeof(uint64_t) + this->mcast_addr.length());
     }
 
-//    void discover_receive() {
-//        struct SimpleMessage msg_recv{};
-//        ssize_t recv_len;
-//        struct sockaddr_in src_addr{};
-//        socklen_t addrlen = sizeof(struct sockaddr_in);
-//
-//        recv_len = recvfrom(recv_socket, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*) &src_addr, &addrlen);
-//        if (recv_len < 0)
-//            syserr("read");
-//        cerr << "discover command received from: " << inet_ntoa(src_addr.sin_addr) << endl;
-//    }
-
-    void files_list_request_receive() {
-        struct SimpleMessage msg_recv{};
-        ssize_t recv_len;
-        struct sockaddr_in src_addr{};
-        socklen_t addrlen = sizeof(struct sockaddr_in);
-
-        recv_len = recvfrom(recv_socket, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*) &src_addr, &addrlen);
-        if (recv_len < 0)
-            syserr("read");
-
-        files_list_request_respond(src_addr, string(msg_recv.data).c_str());
-    }
-
-//    static void send_udp_msg(int socket, struct SimpleMessage& msg_send, struct sockaddr_in& recv_addr) {
-//        if (sendto(socket, &msg_send, sizeof(msg_send), 0, (struct sockaddr*) &recv_addr, sizeof(recv_addr)) != sizeof(msg_send))
-//            syserr("sendto");
-//        cout << "UDP package sent" << endl;
-//    }
-
-    static void fill_cmd_with_filename(struct SimpleMessage& msg_send, uint32_t *start_index, const string& filename) {
+    static void fill_message_with_filename(struct SimpleMessage& msg_send, uint64_t *start_index, const string& filename) {
         strcpy(msg_send.data + *start_index, filename.c_str());
         *start_index += filename.length();
         msg_send.data[(*start_index)++] = '\n';
     }
 
-    /**
-     * @return True if given pattern is a substring of given string,
-     *         false otherwise
-     */
-    static bool is_substring(char const* pattern, const string_view& str) {
-        return str.find(pattern) != string::npos;
-    }
-
-
-    void files_list_request_respond(struct sockaddr_in& recv_addr, const char* pattern) {
+    void files_list_request_respond(struct sockaddr_in& recv_addr, uint64_t message_seq, const char* pattern) {
         cerr << "Files list request for pattern: " << pattern << endl;
         int sock;
-        struct SimpleMessage msg_send{};
+        struct SimpleMessage message{message_seq, cp::files_list_response};
         struct sockaddr_in send_addr{};
 
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -341,22 +303,22 @@ public:
         if (inet_aton(mcast_addr.c_str(), &send_addr.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
             syserr("inet_aton");
 
-        uint32_t curr_data_len = 0;
+        uint64_t curr_data_len = 0;
         string_view filename;
         for (const fs::path& file : this->files_in_storage) {
             filename = file.filename().generic_string();
             if (is_substring(pattern, filename)) {
                 if (const_variables::max_data_size > curr_data_len + filename.length()) {
-                    fill_cmd_with_filename(msg_send, &curr_data_len, file.filename().generic_string());
+                    fill_message_with_filename(message, &curr_data_len, file.filename().generic_string());
                 } else {
-                    send_message_udp(msg_send, recv_addr, curr_data_len);
+                    send_message_udp(message, recv_addr, curr_data_len);
                     curr_data_len = 0;
-                    msg_send.init();
+                    memset(&message.data, '\0', sizeof(message.data));
                 }
             }
         }
         if (curr_data_len > 0)
-            send_message_udp(msg_send, recv_addr, curr_data_len);
+            send_message_udp(message, recv_addr, curr_data_len);
 
         close(sock);
         cerr << "All files matching given pattern has been sent" << endl;
@@ -369,19 +331,6 @@ public:
 
         return this->files_in_storage.end();
     }
-
-//    void get_file_request_receive() {
-//        struct SimpleMessage msg_recv{};
-//        ssize_t recv_len;
-//        struct sockaddr_in src_addr{};
-//        socklen_t addrlen = sizeof(struct sockaddr_in);
-//
-//        recv_len = recvfrom(recv_socket, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*) &src_addr, &addrlen);
-//        if (recv_len < 0)
-//            syserr("read");
-//
-//        get_file_request_respond(src_addr, msg_recv.data);
-//    }
 
     /**
      * 1. Select free port
@@ -402,26 +351,7 @@ public:
         }
     }
 
-    void upload_file_request_receive() {
-        cerr << "Upload file receive" << endl;
-        struct ComplexMessage msg_recv{};
-        ssize_t recv_len;
-        struct sockaddr_in src_addr{};
-        socklen_t addrlen = sizeof(struct sockaddr_in);
-
-        recv_len = recvfrom(recv_socket, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*) &src_addr, &addrlen);
-        if (recv_len < 0)
-            syserr("read");
-
-        upload_file_request_respond(src_addr, msg_recv.data, msg_recv.param);
-        cerr << "Ending upload file receive" << endl;
-    }
-
-    bool is_enough_space(uint64_t file_size) {
-        return file_size <= this->get_available_space();
-    }
-
-    void upload_file_request_respond(struct sockaddr_in& destination_address, const char *filename, uint64_t file_size) {
+    void upload_file_request_respond(struct sockaddr_in& destination_address, uint64_t message_seq, const char *filename, uint64_t file_size) {
         cerr << "File upload request, filename = " << filename << ", filesize = " << file_size << endl;
 
         if (is_enough_space(file_size)) {
@@ -457,8 +387,12 @@ public:
         }
     }
 
+    void remove_file_request_responst(struct sockaddr_in& destination_address, uint64_t message_seq, const char *filename) {
+
+    }
+
     /// Rzuca wyjątek jeśli incorrect message command
-    const char* get_message_command(const ComplexMessage& message) {
+    static const char* get_message_command(const ComplexMessage& message) {
         if (strcmp(message.command, cp::discover_request) == 0)
             return cp::discover_request;
         else if (strcmp(message.command, cp::files_list_request) == 0)
@@ -488,20 +422,24 @@ public:
 
     void run() {
         while (true) {
-            auto[received_message, source_address] = receive_next_message();
+            auto [received_message, source_address] = receive_next_message();
             string_view message_command = get_message_command(received_message);
             if (message_command == cp::discover_request) {
-                SimpleMessage message{received_message};
-                cout << message << endl;
-                discover_respond(source_address, message.message_seq);
+                auto *message = (SimpleMessage*) &received_message;
+                discover_respond(source_address, message->message_seq);
             } else if (message_command == cp::files_list_request) {
-
+                auto *message = (SimpleMessage*) &received_message;
+                cout << *message << endl;
+                files_list_request_respond(source_address, message->message_seq, message->data);
             } else if (message_command == cp::file_get_request) {
-
+                auto *message = (SimpleMessage*) &received_message;
+                cout << *message << endl;
+                get_file_request_respond(source_address, message->message_seq, message->data);
             } else if (message_command == cp::file_add_request) {
-
+                upload_file_request_respond(source_address, received_message.message_seq, received_message.data, received_message.param);
             } else if (message_command == cp::file_remove_request) {
-
+                cout << received_message << endl;
+                remove_file_request_responst(source_address, received_message.message_seq, received_message.data);
             }
         }
     }
