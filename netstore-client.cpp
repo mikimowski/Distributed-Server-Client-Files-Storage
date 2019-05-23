@@ -1,5 +1,8 @@
+#include <utility>
+
 #include <iostream>
 #include <chrono>
+#include <random>
 
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
@@ -10,7 +13,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-
+#include <unordered_map>
 
 #include "err.h"
 #include "helper.h"
@@ -114,8 +117,8 @@ class Client {
     const string folder;
     const uint16_t timeout;
 
-    uint64_t next_cmd_seq;
-
+    std::mt19937_64 generator;
+    std::uniform_int_distribution<uint64_t> uniform_distribution;
 
     // For each filename stores last source_ip from which it was received
     unordered_map<string, const char*> last_search_results;
@@ -126,6 +129,10 @@ class Client {
 
         if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
             syserr("setsockopt 'SO_RCVTIMEO'");
+    }
+
+    uint64_t generate_message_sequence() {
+        return uniform_distribution(generator);
     }
 
     static int create_mcast_udp_socket() {
@@ -147,33 +154,34 @@ class Client {
         return mcast_udp_socket;
     }
 
-    void send_message_mcast_udp(int sock, const ComplexMessage &message) {
+    void send_message_mcast_udp(int sock, const SimpleMessage &message, uint16_t data_length = 0) {
         // send on multicast
         /* ustawienie adresu i portu odbiorcy */
-        struct sockaddr_in send_addr{};
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(cmd_port);
-        if (inet_aton(mcast_addr, &send_addr.sin_addr) == 0)
+        uint16_t message_length = const_variables::simple_command_min_length + data_length;
+        struct sockaddr_in destination_address{};
+        destination_address.sin_family = AF_INET;
+        destination_address.sin_port = htons(cmd_port);
+        if (inet_aton(mcast_addr, &destination_address.sin_addr) == 0)
             syserr("inet_aton");
-        if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr*) &send_addr, sizeof(send_addr)) != sizeof(message))
+        if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
             syserr("sendto");
 
-
-        cerr << "mcast message sent" << endl;
+        cerr << "mcast command sent" << endl;
     }
 
-    void send_message_mcast_udp(int sock, const SimpleMessage &message) {
+    void send_message_mcast_udp(int sock, const ComplexMessage &message, uint16_t data_length = 0) {
         // send on multicast
         /* ustawienie adresu i portu odbiorcy */
-        struct sockaddr_in send_addr{};
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(cmd_port);
-        if (inet_aton(mcast_addr, &send_addr.sin_addr) == 0)
+        uint16_t message_length = const_variables::complex_command_min_length + data_length;
+        struct sockaddr_in destination_address{};
+        destination_address.sin_family = AF_INET;
+        destination_address.sin_port = htons(cmd_port);
+        if (inet_aton(mcast_addr, &destination_address.sin_addr) == 0)
             syserr("inet_aton");
-        if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr*) &send_addr, sizeof(send_addr)) != sizeof(message))
+        if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
             syserr("sendto");
 
-        cerr << "mcast message sent" << endl;
+        cerr << "mcast command sent" << endl;
     }
 
     void display_server_discovered_info(const char* server_ip, const char* server_mcast_addr, uint64_t server_space) {
@@ -185,11 +193,11 @@ class Client {
     }
 
     bool valid_discover_response(struct ComplexMessage& msg) {
+
     }
 
     void send_discover_message(int udp_socket) {
-        uint64_t tmp_message_seq;
-        SimpleMessage message{tmp_message_seq, cp::discover_request};
+        SimpleMessage message{htonl(generate_message_sequence()), cp::discover_request};
         send_message_mcast_udp(udp_socket, message);
     }
 
@@ -210,8 +218,8 @@ class Client {
             } else {
                 addr_length = sizeof(struct sockaddr_in);
                 recv_len = recvfrom(udp_socket, &message_received, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
-                if (recv_len == sizeof(message_received))
-                    display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, message_received.param);
+                if (recv_len >= 0) // TODO is correct?
+                    display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, ntohl(message_received.param));
             }
         }
     }
@@ -223,34 +231,8 @@ class Client {
     }
 
     set<ServerData, std::greater<>> silent_discover() {
-        int sock, optval;
-
-        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-
-        /* uaktywnienie rozgłaszania (ang. broadcast) */
-        optval = 1;
-        if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void*)&optval, sizeof optval) < 0)
-            syserr("setsockopt broadcast");
-
-        /* ustawienie TTL dla datagramów rozsyłanych do grupy */
-        optval = TTL;
-        if (setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, (void*)&optval, sizeof optval) < 0)
-            syserr("setsockopt multicast ttl");
-
-        // send on multicast
-        /* ustawienie adresu i portu odbiorcy */
-        uint64_t tmp_message_seq;
-        struct SimpleMessage msg_send{tmp_message_seq, cp::discover_request};
-        struct sockaddr_in send_addr{};
-        in_port_t send_port = cmd_port;
-
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(send_port);
-        if (inet_aton(mcast_addr, &send_addr.sin_addr) == 0)
-            syserr("inet_aton");
-        if (sendto(sock, &msg_send, sizeof(msg_send), 0, (struct sockaddr*) &send_addr, sizeof(send_addr)) != sizeof(msg_send))
-            syserr("sendto");
+        int udp_socket = create_mcast_udp_socket();  // todo close socket
+        send_discover_message(udp_socket);
 
         // receive
         struct ComplexMessage msg_recv{};
@@ -263,7 +245,7 @@ class Client {
             struct timeval timeval{};
             timeval.tv_usec = 1000;
 
-            if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
+            if (setsockopt(udp_socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
                 syserr("setsockopt 'SO_RCVTIMEO'");
         }
 
@@ -275,9 +257,9 @@ class Client {
             if (elapsed_time.count() / 1000 >= timeout) {
                 timeout_occ = true;
             } else {
-                recv_len = recvfrom(sock, &msg_recv, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
-                if (recv_len == sizeof(msg_recv)) {
-                    servers.insert(ServerData(inet_ntoa(src_addr.sin_addr), msg_recv.param)); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
+                recv_len = recvfrom(udp_socket, &msg_recv, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
+                if (recv_len > 0) {
+                    servers.insert(ServerData(inet_ntoa(src_addr.sin_addr), ntohl(msg_recv.param))); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
                 }
             }
         }
@@ -331,17 +313,17 @@ class Client {
         /* ustawienie adresu i portu odbiorcy */
         uint64_t tmp_message_seq;
         struct SimpleMessage message{tmp_message_seq, cp::files_list_request, pattern.c_str()};
-        //send_message_mcast_udp(message);
+        //send_message_mcast_udp(command);
 //        struct sockaddr_in send_addr{};
 //        in_port_t send_port = (in_port_t)stoi(cmd_port);
 //        if (pattern.length() > 0)
-//            strcpy(message.data, pattern.c_str());
+//            strcpy(command.data, pattern.c_str());
 //
 //        send_addr.sin_family = AF_INET;
 //        send_addr.sin_port = htons(send_port);
 //        if (inet_aton(mcast_addr, &send_addr.sin_addr) == 0)
 //            syserr("inet_aton");
-//        if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr*) &send_addr, sizeof(send_addr)) != sizeof(message))
+//        if (sendto(sock, &command, sizeof(command), 0, (struct sockaddr*) &send_addr, sizeof(send_addr)) != sizeof(command))
 //            syserr("sendto");
 
         // receive
@@ -426,7 +408,7 @@ class Client {
             recv_len = recvfrom(sock, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*)&src_addr, &addr_length);
             if (recv_len == sizeof(msg_recv)) {
                 const char* source_ip = inet_ntoa(src_addr.sin_addr);
-                cout << "Command: " << msg_recv.message << endl;
+                cout << "Command: " << msg_recv.command << endl;
                 cout << "Port: " << msg_recv.param << endl;
                 cout << "Filename: " << msg_recv.data << endl;
             }
@@ -475,7 +457,7 @@ class Client {
 
         recv_len = recvfrom(sock, &msg_recv, sizeof(msg_recv), 0, (struct sockaddr*) &src_addr, &addr_length);
         if (recv_len == sizeof(msg_recv)) {
-            cout << "Command: " << msg_recv.message << endl;
+            cout << "Command: " << msg_recv.command << endl;
             cout << "Port: " << msg_recv.param << endl;
         }
         cerr << "File upload response received" << endl;
@@ -524,17 +506,21 @@ class Client {
     }
 
 public:
-    Client(const char* mcast_addr, uint16_t cmd_port, const string& folder, const uint16_t timeout)
-            : next_cmd_seq(0),
-              mcast_addr(mcast_addr),
+    Client(const char* mcast_addr, uint16_t cmd_port, string folder, const uint16_t timeout)
+            : mcast_addr(mcast_addr),
               cmd_port(cmd_port),
-              folder(folder),
-              timeout(timeout)
+              folder(std::move(folder)),
+              timeout(timeout),
+              generator(std::random_device{}())
     {}
 
     Client(ClientSettings& settings)
             : Client(settings.mcast_addr.c_str(), settings.cmd_port, settings.folder, settings.timeout)
     {}
+
+    void read_next_command() {
+        ComplexMessage message;
+    }
 
     void run() {
 //        cout << *this << endl;
@@ -542,7 +528,9 @@ public:
 //        fetch("file1_server1");
 //
 //        upload("client_file");
-        discover();
+        for (auto server : silent_discover())
+            cout << server << endl;
+//        discover();
     }
 
 
@@ -556,7 +544,6 @@ public:
         out << "CMD_PORT = " << client.cmd_port << endl;
         out << "FOLDER = " << client.folder << endl;
         out << "TIMEOUT = " << client.timeout << endl;
-        out << "NEXT_CMD_SEQ = " << client.next_cmd_seq << endl;
 
         return out;
     }
@@ -565,9 +552,9 @@ public:
 
 int main(int argc, const char *argv[]) {
     ClientSettings client_settings = parse_program_arguments(argc, argv);
-   // get_user_command();
     Client client {client_settings};
     client.init();
+    cout << client << endl;
     client.run();
 
     return 0;
