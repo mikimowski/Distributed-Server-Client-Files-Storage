@@ -10,17 +10,31 @@
 #include <tuple>
 
 #include <unistd.h>
+#include <stdint.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 
-
-
 #include "err.h"
 #include "helper.h"
 
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htobe16(x) OSSwapHostToBigInt16(x)
+#define htole16(x) OSSwapHostToLittleInt16(x)
+#define be16toh(x) OSSwapBigToHostInt16(x)
+#define le16toh(x) OSSwapLittleToHostInt16(x)
+#define htobe32(x) OSSwapHostToBigInt32(x)
+#define htole32(x) OSSwapHostToLittleInt32(x)
+#define be32toh(x) OSSwapBigToHostInt32(x)
+#define le32toh(x) OSSwapLittleToHostInt32(x)
+#define htobe64(x) OSSwapHostToBigInt64(x)
+#define htole64(x) OSSwapHostToLittleInt64(x)
+#define be64toh(x) OSSwapBigToHostInt64(x)
+#define le64toh(x) OSSwapLittleToHostInt64(x)
+#endif	/* __APPLE__ */
 
 constexpr uint16_t default_timeout = 5;
 constexpr uint16_t max_timeout = 300;
@@ -261,7 +275,7 @@ public:
     }
 
     void discover_respond(struct sockaddr_in& destination_address, uint64_t message_seq) {
-        struct ComplexMessage message{message_seq, cp::discover_response, this->mcast_addr.c_str(), htonl(this->get_available_space())};
+        struct ComplexMessage message{message_seq, cp::discover_response, this->mcast_addr.c_str(), htobe64(this->get_available_space())};
         cerr << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port) << endl;
         send_message_udp(message, destination_address, const_variables::max_command_len + 2 * sizeof(uint64_t) + this->mcast_addr.length());
     }
@@ -480,11 +494,11 @@ public:
                 SimpleMessage message{received_message};
                 cout << message << endl;
                 discover_respond(source_address, message.message_seq);
+            } else if (message_command == cp::files_list_request) {
+
             } else if (message_command == cp::file_get_request) {
 
             } else if (message_command == cp::file_add_request) {
-
-            } else if (message_command == cp::files_list_request) {
 
             } else if (message_command == cp::file_remove_request) {
 

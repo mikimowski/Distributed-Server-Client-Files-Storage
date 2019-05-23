@@ -18,6 +18,24 @@
 #include "err.h"
 #include "helper.h"
 
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htobe16(x) OSSwapHostToBigInt16(x)
+#define htole16(x) OSSwapHostToLittleInt16(x)
+#define be16toh(x) OSSwapBigToHostInt16(x)
+#define le16toh(x) OSSwapLittleToHostInt16(x)
+#define htobe32(x) OSSwapHostToBigInt32(x)
+#define htole32(x) OSSwapHostToLittleInt32(x)
+#define be32toh(x) OSSwapBigToHostInt32(x)
+#define le32toh(x) OSSwapLittleToHostInt32(x)
+#define htobe64(x) OSSwapHostToBigInt64(x)
+#define htole64(x) OSSwapHostToLittleInt64(x)
+#define be64toh(x) OSSwapBigToHostInt64(x)
+#define le64toh(x) OSSwapLittleToHostInt64(x)
+#endif	/* __APPLE__ */
+
+
+
 constexpr uint16_t default_timeout = 5;
 constexpr uint16_t max_timeout = 300;
 
@@ -197,7 +215,7 @@ class Client {
     }
 
     void send_discover_message(int udp_socket) {
-        SimpleMessage message{htonl(generate_message_sequence()), cp::discover_request};
+        SimpleMessage message{htobe64(generate_message_sequence()), cp::discover_request};
         send_message_mcast_udp(udp_socket, message);
     }
 
@@ -219,7 +237,7 @@ class Client {
                 addr_length = sizeof(struct sockaddr_in);
                 recv_len = recvfrom(udp_socket, &message_received, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
                 if (recv_len >= 0) // TODO is correct?
-                    display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, ntohl(message_received.param));
+                    display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, be64toh(message_received.param));
             }
         }
     }
@@ -230,7 +248,7 @@ class Client {
         receive_discover_response(udp_socket);
     }
 
-    set<ServerData, std::greater<>> silent_discover() {
+    multiset<ServerData, std::greater<>> silent_discover() {
         int udp_socket = create_mcast_udp_socket();  // todo close socket
         send_discover_message(udp_socket);
 
@@ -249,7 +267,7 @@ class Client {
                 syserr("setsockopt 'SO_RCVTIMEO'");
         }
 
-        set<ServerData, std::greater<>> servers;
+        multiset<ServerData, std::greater<>> servers;
         auto wait_start_time = std::chrono::high_resolution_clock::now();
         while (!timeout_occ) {
             auto curr_time = std::chrono::high_resolution_clock::now();
@@ -259,7 +277,7 @@ class Client {
             } else {
                 recv_len = recvfrom(udp_socket, &msg_recv, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
                 if (recv_len > 0) {
-                    servers.insert(ServerData(inet_ntoa(src_addr.sin_addr), ntohl(msg_recv.param))); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
+                    servers.insert(ServerData(inet_ntoa(src_addr.sin_addr), be64toh(msg_recv.param))); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
                 }
             }
         }
@@ -356,7 +374,7 @@ class Client {
                 recv_len = recvfrom(sock, &msg_recv, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
                 if (recv_len == sizeof(msg_recv)) {
                     const char* source_ip = inet_ntoa(src_addr.sin_addr);
-                  //  display_files_list(msg_recv.data, source_ip);
+                    display_files_list(msg_recv.data, source_ip);
                     update_search_result(msg_recv.data, source_ip);
                 }
             }
@@ -484,12 +502,12 @@ class Client {
         cout << "Starting upload procedure..." << endl;
         ComplexMessage server_response{};
 
-        set<ServerData, std::greater<>> servers = silent_discover();
+        multiset<ServerData, std::greater<>> servers = silent_discover();
         for (const auto& server : servers) {
             server_response = ask_server_to_upload_file(server.ip_addr, filename);
 
             if (can_upload_file(server_response)) {
-                upload_file_via_tcp(server.ip_addr, ntohl(server_response.param), filename);
+                upload_file_via_tcp(server.ip_addr, htobe64(server_response.param), filename);
                 break;
             }
         }
@@ -528,8 +546,7 @@ public:
 //        fetch("file1_server1");
 //
 //        upload("client_file");
-        for (auto server : silent_discover())
-            cout << server << endl;
+            search("file");
 //        discover();
     }
 
