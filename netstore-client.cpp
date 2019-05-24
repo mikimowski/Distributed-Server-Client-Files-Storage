@@ -475,9 +475,29 @@ class Client {
         return receive_add_file_response(udp_socket);
     }
 
+    int create_and_connect_tcp_socket(const char* server_ip, in_port_t server_port) {
+        int tcp_socket;
+        struct sockaddr_in destination_address{};
+        memset(&destination_address, 0, sizeof(destination_address));
+        destination_address.sin_family = AF_INET;
+        destination_address.sin_port = htobe64(server_port);
+        if (inet_aton(server_ip, &destination_address.sin_addr) == 0)
+            syserr("inet_aton");
+        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+            syserr("socket");
+        if (connect(tcp_socket, (struct sockaddr*) &destination_address.sin_addr.s_addr, sizeof(destination_address.sin_len)) < 0)
+            syserr("connect");
+
+        return tcp_socket;
+    }
+
+    void display_socket_info(int sock) {
+        cout <<
+    }
+
     void upload_file_via_tcp(const char* server_ip, in_port_t server_port, const char* filename) {
         cerr << "Starting uploading file via tcp..." << endl;
-
+        int tcp_socket = create_and_connect_tcp_socket(server_ip, server_port);
         cerr << "Ending uploading file via tcp..." << endl;
     }
 
