@@ -6,6 +6,7 @@
 
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/filesystem.hpp>
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -14,6 +15,7 @@
 #include <sys/socket.h>
 
 #include <unordered_map>
+#include <fstream>
 
 #include "err.h"
 #include "helper.h"
@@ -35,13 +37,13 @@
 #endif	/* __APPLE__ */
 
 
-
 constexpr uint16_t default_timeout = 5;
 constexpr uint16_t max_timeout = 300;
 
 using namespace std;
 namespace po = boost::program_options;
 namespace cp = communication_protocol;
+namespace fs = boost::filesystem;
 
 struct ServerData {
     uint64_t available_space;
@@ -108,8 +110,6 @@ ClientSettings parse_program_arguments(int argc, const char *argv[]) {
 }
 
 
-
-
 class Client {
     const char* mcast_addr;
     const uint16_t cmd_port;
@@ -152,6 +152,32 @@ class Client {
     uint64_t generate_message_sequence() {
         return uniform_distribution(generator);
     }
+
+    // TODO jakoś lepiej...
+    static bool is_valid_message(SimpleMessage message, uint64_t expected_message_seq, const char* expected_command) {
+        if (be64toh(message.message_seq) != expected_message_seq)
+            return false;
+        if (!is_correct_string(message.command, const_variables::max_command_length))
+            return false;
+        if (strcmp(message.command, expected_command) != 0)
+            return false;
+        if (!is_correct_string(message.data, const_variables::max_simple_data_size))
+            return false;
+        return true;
+    }
+
+    static bool is_valid_message(ComplexMessage message, uint64_t expected_message_seq, const char* expected_command) {
+        if (be64toh(message.message_seq) != expected_message_seq)
+            return false;
+        if (!is_correct_string(message.command, const_variables::max_command_length))
+            return false;
+        if (strcmp(message.command, expected_command) != 0)
+            return false;
+        if (!is_correct_string(message.data, const_variables::max_complex_data_size))
+            return false;
+        return true;
+    }
+
 
     void send_message_multicast_udp(int sock, const SimpleMessage &message, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
@@ -211,20 +237,19 @@ class Client {
         cout << "Found " << server_ip << " (" << server_mcast_addr << ") with free space " << server_space << endl;
     }
 
-    bool correct_cmd_seq(uint64_t expected, uint64_t received) {
-        return expected == received;
-    }
 
-    bool valid_discover_response(struct ComplexMessage& msg) {
-
-    }
-
-    void send_discover_message(int udp_socket) {
-        SimpleMessage message{htobe64(generate_message_sequence()), cp::discover_request};
+    /**
+     * @param udp_socket
+     * @return Expected respond message's message_seq
+     */
+    uint64_t send_discover_message(int udp_socket) {
+        uint64_t message_seq = generate_message_sequence();
+        SimpleMessage message{htobe64(message_seq), cp::discover_request};
         send_message_multicast_udp(udp_socket, message);
+        return message_seq;
     }
 
-    void receive_discover_response(int udp_socket) {
+    void receive_discover_response(int udp_socket, uint64_t expected_message_seq) {
         struct ComplexMessage message_received{};
         struct sockaddr_in src_addr{};
         socklen_t addr_length;
@@ -241,38 +266,33 @@ class Client {
             } else {
                 addr_length = sizeof(struct sockaddr_in);
                 recv_len = recvfrom(udp_socket, &message_received, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addr_length);
-                if (recv_len >= 0) // TODO is correct?
-                    display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, be64toh(message_received.param));
+                // TODO is correct?
+                if (recv_len >= 0) {
+                    if (is_valid_message(message_received, expected_message_seq, cp::discover_response))
+                        display_server_discovered_info(inet_ntoa(src_addr.sin_addr), message_received.data, be64toh(message_received.param));
+                    else
+                        cerr << "Incorrect discover response" << endl;
+                }
             }
         }
     }
 
     void discover() {
         int udp_socket = create_multicast_udp_socket();  // todo close socket
-        send_discover_message(udp_socket);
-        receive_discover_response(udp_socket);
+        uint64_t expected_message_seq = send_discover_message(udp_socket);
+        receive_discover_response(udp_socket, expected_message_seq);
     }
 
-    multiset<ServerData, std::greater<>> silent_discover() {
-        int udp_socket = create_multicast_udp_socket();  // todo close socket
-        send_discover_message(udp_socket);
-
-        // receive
+    multiset<ServerData, std::greater<>> silent_discover_receive(int udp_socket, uint64_t expected_message_seq) {
+        multiset<ServerData, std::greater<>> servers;
         struct ComplexMessage msg_recv{};
         struct sockaddr_in src_addr{};
         socklen_t addr_length = sizeof(struct sockaddr_in);
         ssize_t recv_len;
         bool timeout_occ = false;
 
-        {
-            struct timeval timeval{};
-            timeval.tv_usec = 1000;
+        set_socket_timeout(udp_socket);
 
-            if (setsockopt(udp_socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
-                syserr("setsockopt 'SO_RCVTIMEO'");
-        }
-
-        multiset<ServerData, std::greater<>> servers;
         auto wait_start_time = std::chrono::high_resolution_clock::now();
         while (!timeout_occ) {
             auto curr_time = std::chrono::high_resolution_clock::now();
@@ -286,6 +306,16 @@ class Client {
                 }
             }
         }
+
+        return servers;
+    }
+
+    multiset<ServerData, std::greater<>> silent_discover() {
+        int udp_socket = create_multicast_udp_socket();
+        uint64_t expected_message_seq = send_discover_message(udp_socket);
+        auto servers = silent_discover_receive(udp_socket, expected_message_seq);
+        if (close(udp_socket) < 0)
+            syserr("close");
 
         return servers;
     }
@@ -441,7 +471,7 @@ class Client {
     /*** ADD FILE ***/
 
     static bool can_upload_file(ComplexMessage server_response) {
-        return server_response.data == cp::file_add_acceptance;
+        return strcmp(server_response.command, cp::file_add_acceptance) == 0;
     }
 
     void send_add_file_request(int udp_socket, const char* destination_ip, const string &filename) {
@@ -456,9 +486,8 @@ class Client {
         ssize_t recv_len;
 
         recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addr_length);
-        if (recv_len > 0) {
-            cerr << "File upload response received" << endl;
-        }
+        if (recv_len > 0)
+            cout << "File upload response received" << endl;
 
         return message;
     }
@@ -475,30 +504,45 @@ class Client {
         return receive_add_file_response(udp_socket);
     }
 
-    int create_and_connect_tcp_socket(const char* server_ip, in_port_t server_port) {
+    static int create_and_connect_tcp_socket(const char* destination_ip, uint16_t destination_port) {
         int tcp_socket;
         struct sockaddr_in destination_address{};
         memset(&destination_address, 0, sizeof(destination_address));
         destination_address.sin_family = AF_INET;
-        destination_address.sin_port = htobe64(server_port);
-        if (inet_aton(server_ip, &destination_address.sin_addr) == 0)
+        destination_address.sin_port = htobe16(destination_port);
+        if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
             syserr("inet_aton");
-        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
             syserr("socket");
-        if (connect(tcp_socket, (struct sockaddr*) &destination_address.sin_addr.s_addr, sizeof(destination_address.sin_len)) < 0)
+        if (connect(tcp_socket, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
             syserr("connect");
 
         return tcp_socket;
     }
 
-    void display_socket_info(int sock) {
-        cout <<
-    }
-
     void upload_file_via_tcp(const char* server_ip, in_port_t server_port, const char* filename) {
-        cerr << "Starting uploading file via tcp..." << endl;
+        cout << "Starting uploading file via tcp..." << endl;
         int tcp_socket = create_and_connect_tcp_socket(server_ip, server_port);
-        cerr << "Ending uploading file via tcp..." << endl;
+
+        fs::path file_path{this->folder + filename};
+        std::ifstream file_stream{file_path.c_str(), std::ios::binary};
+
+        if (file_stream.is_open()) {
+            char buffer[MAX_BUFFER_SIZE];
+            while (file_stream) {
+                file_stream.read(buffer, MAX_BUFFER_SIZE);
+                ssize_t length = file_stream.gcount();
+                if (write(tcp_socket, buffer, length) != length)
+                    syserr("partial write");
+            }
+        } else {
+            cerr << "File opening error" << endl; // TODO
+        }
+        file_stream.close(); // TODO can throw
+
+        if (close(tcp_socket) < 0)
+            syserr("close");
+        cout << "Ending uploading file via tcp..." << endl;
     }
 
     /**
@@ -519,6 +563,7 @@ class Client {
             server_response = ask_server_to_upload_file(server.ip_addr, filename.c_str());
 
             if (can_upload_file(server_response)) {
+                cout << "Can upload!" << endl;
                 upload_file_via_tcp(server.ip_addr, htobe64(server_response.param), filename.c_str());
                 break;
             }
@@ -550,9 +595,6 @@ public:
             : Client(settings.mcast_addr.c_str(), settings.cmd_port, settings.folder, settings.timeout)
     {}
 
-    void display_log_separator() {
-        cout << "[------------------------------------------------------------------------]" << endl;
-    }
 
     void run() {
         string comm, param;

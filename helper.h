@@ -3,14 +3,15 @@
 
 #define TTL 4
 #define TCP_QUEUE_LENGTH 5
-
+#define MAX_BUFFER_SIZE 50
 
 
 namespace const_variables { // TODO
-    constexpr int max_command_len = 10;
-    constexpr int max_data_size = 65489; // 2^16 = IP packet has 16 bits, UDP provides datagram as a part of IP packet 65489
-    constexpr uint16_t simple_message_no_data_size = const_variables::max_command_len + sizeof(uint64_t);
-    constexpr uint16_t complex_message_no_data_size = const_variables::max_command_len + 2 * sizeof(uint64_t);
+    constexpr int max_command_length = 10;
+    constexpr int max_simple_data_size = 65489;
+    constexpr int max_complex_data_size = max_simple_data_size - sizeof(uint64_t); // 2^16 = IP packet has 16 bits, UDP provides datagram as a part of IP packet 65489
+    constexpr uint16_t simple_message_no_data_size = const_variables::max_command_length + sizeof(uint64_t);
+    constexpr uint16_t complex_message_no_data_size = const_variables::max_command_length + 2 * sizeof(uint64_t);
     constexpr int random_seed = 0;
 }
 
@@ -25,17 +26,14 @@ namespace communication_protocol {
     const char* file_add_request = "ADD";
     const char* file_add_refusal = "NO_WAY";
     const char* file_add_acceptance = "CAN_ADD";
-
-
-//    constexpr uint16_t discover_response_message_size = ;
 }
 
 
 struct __attribute__((__packed__)) ComplexMessage {
-    char command[const_variables::max_command_len];
+    char command[const_variables::max_command_length];
     uint64_t message_seq;
     uint64_t param;
-    char data[const_variables::max_data_size - sizeof(param)];
+    char data[const_variables::max_complex_data_size];
 
     ComplexMessage() {
         init();
@@ -44,7 +42,7 @@ struct __attribute__((__packed__)) ComplexMessage {
     ComplexMessage(uint64_t message_seq, const std::string_view& message, const char *data = "", uint64_t param = 0) {
         init();
         this->message_seq = message_seq;
-        for (int i = 0; i < const_variables::max_command_len; i++)
+        for (int i = 0; i < const_variables::max_command_length; i++)
             if (i < message.length())
                 this->command[i] = message[i];
         strcpy(this->data, data);
@@ -61,7 +59,7 @@ struct __attribute__((__packed__)) ComplexMessage {
     }
 
     void set_message(const std::string_view &msg) {
-        for (int i = 0; i < const_variables::max_command_len; i++)
+        for (int i = 0; i < const_variables::max_command_length; i++)
             if (i < msg.length())
                 this->command[i] = msg[i];
     }
@@ -74,7 +72,8 @@ struct __attribute__((__packed__)) ComplexMessage {
     }
 
     friend std::ostream& operator << (std::ostream &out, ComplexMessage& rhs) {
-        out << "MESSAGE = " << rhs.command << std::endl;
+        out << "MESSAGE: " << std::endl;
+        out << "COMMAND = " << rhs.command << std::endl;
         out << "MESSAGE_SEQ = " << rhs.message_seq << std::endl;
         out << "PARAM = " << rhs.param << std::endl;
         out << "DATA = " << rhs.data << std::endl;
@@ -84,9 +83,9 @@ struct __attribute__((__packed__)) ComplexMessage {
 
 
 struct __attribute__((__packed__)) SimpleMessage {
-    char command[const_variables::max_command_len];
+    char command[const_variables::max_command_length];
     uint64_t message_seq;
-    char data[const_variables::max_data_size];
+    char data[const_variables::max_simple_data_size];
 
     SimpleMessage() {
         init();
@@ -95,7 +94,7 @@ struct __attribute__((__packed__)) SimpleMessage {
     SimpleMessage(uint64_t message_seq, const std::string_view& message, const char *data = "") {
         init();
         this->message_seq = message_seq;
-        for (int i = 0; i < const_variables::max_command_len; i++)
+        for (int i = 0; i < const_variables::max_command_length; i++)
             if (i < message.length())
                 this->command[i] = message[i];
         strcpy(this->data, data);
@@ -116,7 +115,7 @@ struct __attribute__((__packed__)) SimpleMessage {
     }
 
     void set_message(const std::string_view &msg) {
-        for (int i = 0; i < const_variables::max_command_len; i++)
+        for (int i = 0; i < const_variables::max_command_length; i++)
             if (i < msg.length())
                 this->command[i] = msg[i];
     }
@@ -128,7 +127,8 @@ struct __attribute__((__packed__)) SimpleMessage {
     }
 
     friend std::ostream& operator << (std::ostream &out, SimpleMessage& rhs) {
-        out << "MESSAGE = " << rhs.command << std::endl;
+        out << "MESSAGE: " << std::endl;
+        out << "COMMAND = " << rhs.command << std::endl;
         out << "MESSAGE_SEQ = " << rhs.message_seq << std::endl;
         out << "DATA = " << rhs.data << std::endl;
         return out;
@@ -136,7 +136,6 @@ struct __attribute__((__packed__)) SimpleMessage {
 };
 
 /// Must be ended with '\0'
-/// TODO how about \n? :/
 bool is_correct_string(const char* str, uint64_t max_len) {
     uint64_t i = 0;
     while (i < max_len && str[i] != '\0')
@@ -163,8 +162,12 @@ bool is_correct_files_list(const char* str, uint64_t max_len) {
  * @return True if given pattern is a substring of given string,
  *         false otherwise
  */
-static bool is_substring(char const* pattern, const std::string_view& str) {
+bool is_substring(char const* pattern, const std::string_view& str) {
     return str.find(pattern) != std::string::npos;
+}
+
+void display_log_separator() {
+    std::cout << "[------------------------------------------------------------------------]" << std::endl;
 }
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

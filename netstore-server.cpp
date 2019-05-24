@@ -40,6 +40,8 @@ constexpr uint16_t default_timeout = 5;
 constexpr uint16_t max_timeout = 300;
 constexpr uint64_t default_max_disc_space = 52428800;
 
+#define MAX_QUEUE_LENGTH 5
+
 using std::string;
 using std::cout;
 using std::endl;
@@ -113,7 +115,7 @@ ServerParameters parse_program_arguments(int argc, const char *argv[]) {
 }
 
 class Server {
-    const string mcast_addr;
+    const string multicast_address;
     in_port_t cmd_port;
     uint64_t used_space = 0;
     uint64_t max_available_space;
@@ -121,8 +123,6 @@ class Server {
     const uint16_t timeout;
 
     vector<fs::path> files_in_storage;
-    std::mt19937_64 generator;
-    std::uniform_int_distribution<uint64_t> uniform_distribution;
 
     /*** Receiving ***/
     int recv_socket;
@@ -140,10 +140,6 @@ class Server {
                 this->used_space += fs::file_size(path.path());
            }
         }
-    }
-
-    uint64_t generate_message_sequence() {
-        return uniform_distribution(generator);
     }
 
     uint64_t get_available_space() {
@@ -164,46 +160,22 @@ class Server {
         if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
             syserr("listen");
 
-//        struct addrinfo addr_hints{};
-//        struct addrinfo *addr_result{};
-//
-//        // Passing host/port string to struct addrinfo
-//        memset(&addr_hints, 0, sizeof(struct addrinfo));
-//        addr_hints.ai_family = AF_INET; // IPv4
-//        addr_hints.ai_socktype = SOCK_STREAM;
-//        addr_hints.ai_protocol = IPPROTO_TCP;
-//        int error = getaddrinfo(client_ip, server_port, &addr_hints, &addr_result);
-//        if (error == EAI_SYSTEM) { // system error
-//            syserr("getaddrinfo: %s", gai_strerror(error));
-//        } else if (error != 0) {
-//            syserr("getaddrinfo: %s", gai_strerror(error));
-//        }
-//
-//        // Initialize socket according to getaddrinfo results
-//        if ((tcp_socket = socket(addr_result->ai_family, addr_result->ai_socktype, addr_result->ai_protocol)) < 0)
-//            syserr("socket");
-//
-//        // Connect socket to the server
-//        if (connect(tcp_socket, addr_result->ai_addr, addr_result->ai_addrlen) < 0)
-//            syserr("connect");
-
         // Retrieve assigned port
         if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
             syserr("getsockname");
         in_port_t tcp_port = ntohs(local_addr.sin_port);
 
-        cerr << "TCP socket created, port chosen = " << tcp_port << endl;
+        cout << "TCP socket created, port chosen = " << tcp_port << endl;
         return {tcp_socket, tcp_port};
     }
 
 public:
     Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
-        : mcast_addr(std::move(mcast_addr)),
+        : multicast_address(std::move(mcast_addr)),
         cmd_port(cmd_port),
         max_available_space(max_available_space),
         shared_folder(move(shared_folder_path)),
-        timeout(timeout),
-        generator(std::random_device{}())
+        timeout(timeout)
         {}
 
     Server(const struct ServerParameters& server_parameters)
@@ -235,7 +207,7 @@ public:
 
     void join_multicast_group() {
         ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-        if (inet_aton(this->mcast_addr.c_str(), &ip_mreq.imr_multiaddr) == 0)
+        if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
             syserr("inet_aton");
         if (setsockopt(recv_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
             syserr("setsockopt");
@@ -274,12 +246,11 @@ public:
         cerr << "UDP command sent" << endl;
     }
 
-    void discover_respond(struct sockaddr_in& destination_address, uint64_t message_seq) {
-        struct ComplexMessage message{message_seq, cp::discover_response, this->mcast_addr.c_str(), htobe64(this->get_available_space())};
+    void handle_discover_request(struct sockaddr_in &destination_address, uint64_t message_seq) {
+        struct ComplexMessage message{htobe64(message_seq), cp::discover_response, this->multicast_address.c_str(), htobe64(this->get_available_space())};
         cerr << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port) << endl;
-        cerr << "Message: " << endl;
         cerr << message << endl;
-        send_message_udp(message, destination_address, const_variables::max_command_len + 2 * sizeof(uint64_t) + this->mcast_addr.length());
+        send_message_udp(message, destination_address, const_variables::max_command_length + 2 * sizeof(uint64_t) + this->multicast_address.length());
     }
 
     static void fill_message_with_filename(struct SimpleMessage& msg_send, uint64_t *start_index, const string& filename) {
@@ -288,10 +259,10 @@ public:
         msg_send.data[(*start_index)++] = '\n';
     }
 
-    void files_list_request_respond(struct sockaddr_in& recv_addr, uint64_t message_seq, const char* pattern) {
-        cerr << "Files list request for pattern: " << pattern << endl;
+    void handle_files_list_request(struct sockaddr_in &recv_addr, uint64_t message_seq, const char *pattern) {
+        cout << "Files list request for pattern: " << pattern << endl;
         int sock;
-        struct SimpleMessage message{message_seq, cp::files_list_response};
+        struct SimpleMessage message{htobe64(message_seq), cp::files_list_response};
         struct sockaddr_in send_addr{};
 
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -300,7 +271,7 @@ public:
         in_port_t remote_port = cmd_port;
         send_addr.sin_family = AF_INET;
         send_addr.sin_port = htons(remote_port);
-        if (inet_aton(mcast_addr.c_str(), &send_addr.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
+        if (inet_aton(multicast_address.c_str(), &send_addr.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
             syserr("inet_aton");
 
         uint64_t curr_data_len = 0;
@@ -308,7 +279,7 @@ public:
         for (const fs::path& file : this->files_in_storage) {
             filename = file.filename().generic_string();
             if (is_substring(pattern, filename)) {
-                if (const_variables::max_data_size > curr_data_len + filename.length()) {
+                if (const_variables::max_simple_data_size > curr_data_len + filename.length()) {
                     fill_message_with_filename(message, &curr_data_len, file.filename().generic_string());
                 } else {
                     send_message_udp(message, recv_addr, curr_data_len);
@@ -321,7 +292,7 @@ public:
             send_message_udp(message, recv_addr, curr_data_len);
 
         close(sock);
-        cerr << "All files matching given pattern has been sent" << endl;
+        cout << "All files matching given pattern has been sent" << endl;
     }
 
     vector<fs::path>::iterator find_file(const char* filename) {
@@ -337,13 +308,13 @@ public:
      * 2. Send chosen port to the client
      * 3. Wait on this port for TCP connection with the client
      */
-    void get_file_request_respond(struct sockaddr_in& destination_address, uint64_t message_seq, const char* filename) {
+    void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
         cout << "File request, filename = " << filename << endl;
 
         if (find_file(filename) != this->files_in_storage.end()) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
-            ComplexMessage message{message_seq, cp::file_get_response, filename, tcp_port};
+            ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename, tcp_port};
             send_message_udp(message, destination_address, strlen(filename));
             cerr << "TCP port info sent" << endl;
         } else {
@@ -351,43 +322,48 @@ public:
         }
     }
 
-    void upload_file_request_respond(struct sockaddr_in& destination_address, uint64_t message_seq, const char *filename, uint64_t file_size) {
-        cerr << "File upload request, filename = " << filename << ", filesize = " << file_size << endl;
-
+    void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
+            const char *filename, uint64_t file_size) {
+        cout << "File upload request, filename = " << filename << ", filesize = " << file_size << endl;
         if (is_enough_space(file_size)) {
-            cerr << "Enough space" << endl;
-
-            auto [tcp_sock, tcp_port] = create_tcp_socket();
-//            // Prepare tcp socket
-//            int tcp_sock;
-//            struct sockaddr_in local_addr{};
-//            socklen_t addrlen = sizeof(local_addr);
-//            memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
-//            local_addr.sin_family = AF_INET;
-//
-//            if ((tcp_sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-//                syserr("socket");
-//            if (bind(tcp_sock, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
-//                syserr("bind");
-//            if (getsockname(tcp_sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
-//                syserr("getsockname");
-//
-//            in_port_t tcp_port = local_addr.sin_port;
+            cout << "Accepting file upload request" << endl;
+            auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             // Send info about tcp port
-            uint64_t tmp_message_seq;
-            ComplexMessage message{tmp_message_seq, cp::file_add_acceptance, "", tcp_port};
+            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, "", htobe64(tcp_port)};
             send_message_udp(message, destination_address);
-
-            cerr << "TCP port info sent" << endl;
+            upload_file_via_tcp(tcp_socket, filename);
         } else {
-            cerr << "Not enough space or incorrect file name" << endl;
-            uint64_t tmp_message_seq;
-            SimpleMessage message{tmp_message_seq, cp::file_add_refusal};
+            cerr << "Rejecting file upload request" << endl;
+            SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
+            send_message_udp(message, destination_address);
         }
     }
 
-    void remove_file_request_responst(struct sockaddr_in& destination_address, uint64_t message_seq, const char *filename) {
+    void upload_file_via_tcp(int tcp_socket, const char* filename) {
+        cout << "Uploading file via tcp..." << endl;
+
+        struct sockaddr_in source_address{};
+        memset(&source_address, 0, sizeof(source_address));
+        socklen_t len = sizeof(source_address);
+        int sock = accept(tcp_socket, (struct sockaddr*) &source_address, &len);
+
+        fs::path file_path(this->shared_folder + filename);
+        fs::ofstream ofs(file_path,std::ofstream::binary);
+
+        char buffer[MAX_BUFFER_SIZE];
+        while ((len = read(sock, buffer, sizeof(buffer))) > 0) {
+            ofs.write(buffer, len);
+        }
+        ofs.close();
+
+        if (close(sock) < 0)
+            syserr("close");
+
+        cout << "Ending uploading file via tcp" << endl;
+    }
+
+    void handle_remove_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
 
     }
 
@@ -422,24 +398,26 @@ public:
 
     void run() {
         while (true) {
+            display_log_separator();
             auto [received_message, source_address] = receive_next_message();
             string_view message_command = get_message_command(received_message);
             if (message_command == cp::discover_request) {
                 auto *message = (SimpleMessage*) &received_message;
-                discover_respond(source_address, message->message_seq);
+                handle_discover_request(source_address, be64toh(message->message_seq));
             } else if (message_command == cp::files_list_request) {
                 auto *message = (SimpleMessage*) &received_message;
                 cout << *message << endl;
-                files_list_request_respond(source_address, message->message_seq, message->data);
+                handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
             } else if (message_command == cp::file_get_request) {
                 auto *message = (SimpleMessage*) &received_message;
                 cout << *message << endl;
-                get_file_request_respond(source_address, message->message_seq, message->data);
+                handle_file_request(source_address, be64toh(message->message_seq), message->data);
             } else if (message_command == cp::file_add_request) {
-                upload_file_request_respond(source_address, received_message.message_seq, received_message.data, received_message.param);
+                handle_upload_request(source_address, be64toh(received_message.message_seq), received_message.data,
+                                      received_message.param);
             } else if (message_command == cp::file_remove_request) {
                 cout << received_message << endl;
-                remove_file_request_responst(source_address, received_message.message_seq, received_message.data);
+                handle_remove_request(source_address, be64toh(received_message.message_seq), received_message.data);
             }
         }
     }
