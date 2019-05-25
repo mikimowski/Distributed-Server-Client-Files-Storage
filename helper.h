@@ -39,12 +39,12 @@ struct __attribute__((__packed__)) ComplexMessage {
         init();
     }
 
-    ComplexMessage(uint64_t message_seq, const std::string_view& message, const char *data = "", uint64_t param = 0) {
+    ComplexMessage(uint64_t message_seq, const std::string_view& command, const char *data = "", uint64_t param = 0) {
         init();
         this->message_seq = message_seq;
         for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < message.length())
-                this->command[i] = message[i];
+            if (i < command.length())
+                this->command[i] = command[i];
         strcpy(this->data, data);
         this->param = param;
     }
@@ -72,11 +72,7 @@ struct __attribute__((__packed__)) ComplexMessage {
     }
 
     friend std::ostream& operator << (std::ostream &out, ComplexMessage& rhs) {
-        out << "MESSAGE: " << std::endl;
-        out << "COMMAND = " << rhs.command << std::endl;
-        out << "MESSAGE_SEQ = " << rhs.message_seq << std::endl;
-        out << "PARAM = " << rhs.param << std::endl;
-        out << "DATA = " << rhs.data << std::endl;
+        out << "[COMMAND = "<< rhs.command<< "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [PARAM = " << rhs.param << "] [DATA = " << rhs.data << "]";
         return out;
     }
 };
@@ -91,12 +87,12 @@ struct __attribute__((__packed__)) SimpleMessage {
         init();
     }
 
-    SimpleMessage(uint64_t message_seq, const std::string_view& message, const char *data = "") {
+    SimpleMessage(uint64_t message_seq, const std::string_view& command, const char *data = "") {
         init();
         this->message_seq = message_seq;
         for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < message.length())
-                this->command[i] = message[i];
+            if (i < command.length())
+                this->command[i] = command[i];
         strcpy(this->data, data);
     }
 
@@ -127,10 +123,7 @@ struct __attribute__((__packed__)) SimpleMessage {
     }
 
     friend std::ostream& operator << (std::ostream &out, SimpleMessage& rhs) {
-        out << "MESSAGE: " << std::endl;
-        out << "COMMAND = " << rhs.command << std::endl;
-        out << "MESSAGE_SEQ = " << rhs.message_seq << std::endl;
-        out << "DATA = " << rhs.data << std::endl;
+        out << "[COMMAND = "<< rhs.command<< "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [DATA = " << rhs.data << "]";
         return out;
     }
 };
@@ -169,5 +162,7 @@ bool is_substring(char const* pattern, const std::string_view& str) {
 void display_log_separator() {
     std::cout << "[------------------------------------------------------------------------]" << std::endl;
 }
+
+size_t get_file_size(const std::string& file);
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

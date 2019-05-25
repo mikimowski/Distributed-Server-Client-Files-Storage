@@ -46,7 +46,7 @@ struct ServerData {
 struct ClientSettings {
     string multicast_address;
     string cmd_port;
-    string folder;
+    string out_folder;
     uint16_t timeout;
 };
 
@@ -58,7 +58,7 @@ ClientSettings parse_program_arguments(int argc, const char *argv[]) {
         ("help,h", "Help screen")
         ("MCAST_ADDR,g", po::value<string>(&client_settings.multicast_address)->required(), "Multicast address")
         ("CMD_PORT,p", po::value<string>(&client_settings.cmd_port)->required(), "UDP port on which servers are listening")
-        ("OUT_FLDR,o", po::value<string>(&client_settings.folder)->required(), "Path to the directory in which files should be saved")
+        ("OUT_FLDR,o", po::value<string>(&client_settings.out_folder)->required(), "Path to the directory in which files should be saved")
         ("TIMEOUT,t", po::value<uint16_t>(&client_settings.timeout)->default_value(default_timeout)->notifier([](uint16_t timeout) {
              if (timeout > max_timeout) {
                  cerr << "TIMEOUT out of range\n";
@@ -112,7 +112,7 @@ void get_user_command() {
 class Client {
     const char* multicast_address;
     const char* cmd_port;
-    const string folder;
+    const string out_folder;
     const uint16_t timeout;
 
     uint64_t next_cmd_seq;
@@ -499,16 +499,16 @@ class Client {
     }
 
 public:
-    Client(const char* multicast_address, const char* cmd_port, const string& folder, const uint16_t timeout)
+    Client(const char* multicast_address, const char* cmd_port, const string& out_folder, const uint16_t timeout)
             : next_cmd_seq(0),
               multicast_address(multicast_address),
               cmd_port(cmd_port),
-              folder(folder),
+              out_folder(out_folder),
               timeout(timeout)
     {}
 
     Client(ClientSettings& settings)
-            : Client(settings.multicast_address.c_str(), settings.cmd_port.c_str(), settings.folder, settings.timeout)
+            : Client(settings.multicast_address.c_str(), settings.cmd_port.c_str(), settings.out_folder, settings.timeout)
     {}
 
     void run() {
@@ -522,7 +522,7 @@ public:
         out << "CLIENT INFO:" << endl;
         out << "MCAST_ADDR = " << client.multicast_address << endl;
         out << "CMD_PORT = " << client.cmd_port << endl;
-        out << "FOLDER = " << client.folder << endl;
+        out << "FOLDER = " << client.out_folder << endl;
         out << "TIMEOUT = " << client.timeout << endl;
         out << "NEXT_CMD_SEQ = " << client.next_cmd_seq << endl;
 

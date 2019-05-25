@@ -28,6 +28,17 @@ void syserr(const char *fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
+//void syserr(const char *fmt, ...) {
+//    va_list fmt_args;
+//    int errno1 = errno;
+//
+//    va_start(fmt_args, fmt);
+//    BOOST_LOG_TRIVIAL(error) << fmt << " " << errno << " " << strerror(errno1);
+//    va_end(fmt_args);
+//    exit(EXIT_FAILURE);
+//}
+
+
 void fatal(const char *fmt, ...){
     va_list fmt_args;
 

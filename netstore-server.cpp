@@ -4,6 +4,12 @@
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
+
+#include <boost/log/core.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/log/utility/setup/file.hpp>
+#include <boost/log/utility/setup/common_attributes.hpp>
+
 #include <vector>
 #include <random>
 
@@ -50,10 +56,12 @@ using std::to_string;
 using std::vector;
 using std::string_view;
 using std::tuple;
+using std::ostream;
 
 namespace fs = boost::filesystem;
 namespace po = boost::program_options;
 namespace cp = communication_protocol;
+namespace logging = boost::log;
 
 struct ServerParameters {
     string mcast_addr;
@@ -63,15 +71,6 @@ struct ServerParameters {
     uint16_t timeout;
 
     ServerParameters() = default;
-
-    void display() {
-        cout << "Server settings:" << endl;
-        cout << "MCAST_ADDR = " << this->mcast_addr << endl;
-        cout << "CMD_PORT = " << this->cmd_port << endl;
-        cout << "MAX_SPACE = " << this->max_space << endl;
-        cout << "SHARED_FOLDER = " << this->shared_folder << endl;
-        cout << "TIMEOUT = " << this->timeout << endl;
-    }
 };
 
 ServerParameters parse_program_arguments(int argc, const char *argv[]) {
@@ -159,13 +158,11 @@ class Server {
             syserr("bind");
         if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
             syserr("listen");
-
-        // Retrieve assigned port
         if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
             syserr("getsockname");
-        in_port_t tcp_port = ntohs(local_addr.sin_port);
+        in_port_t tcp_port = be16toh(local_addr.sin_port);
 
-        cout << "TCP socket created, port chosen = " << tcp_port << endl;
+        BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
         return {tcp_socket, tcp_port};
     }
 
@@ -183,6 +180,11 @@ public:
                 server_parameters.shared_folder, server_parameters.timeout)
         {}
 
+    void init() {
+        generate_files_in_storage();
+        init_recv_socket();
+    }
+
     void init_recv_socket() {
         if ((recv_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
             syserr("socket");
@@ -198,11 +200,6 @@ public:
         local_address.sin_port = htons(cmd_port);
         if (bind(recv_socket, (struct sockaddr*) &local_address, sizeof(local_address)) < 0)
             syserr("bind");
-    }
-
-    void init() {
-        generate_files_in_storage();
-        init_recv_socket();
     }
 
     void join_multicast_group() {
@@ -231,7 +228,7 @@ public:
             syserr("sendto");
         if (close(sock) < 0)
             syserr("sock");
-        cerr << "UDP command sent" << endl;
+        BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
     void send_message_udp(const ComplexMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
@@ -243,13 +240,13 @@ public:
             syserr("sendto");
         if (close(sock) < 0)
             syserr("sock");
-        cerr << "UDP command sent" << endl;
+        BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
     void handle_discover_request(struct sockaddr_in &destination_address, uint64_t message_seq) {
         struct ComplexMessage message{htobe64(message_seq), cp::discover_response, this->multicast_address.c_str(), htobe64(this->get_available_space())};
-        cerr << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port) << endl;
-        cerr << message << endl;
+        BOOST_LOG_TRIVIAL(info) << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port);
+        BOOST_LOG_TRIVIAL(info) << "Message send: " << message;
         send_message_udp(message, destination_address, const_variables::max_command_length + 2 * sizeof(uint64_t) + this->multicast_address.length());
     }
 
@@ -260,7 +257,7 @@ public:
     }
 
     void handle_files_list_request(struct sockaddr_in &recv_addr, uint64_t message_seq, const char *pattern) {
-        cout << "Files list request for pattern: " << pattern << endl;
+        BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
         int sock;
         struct SimpleMessage message{htobe64(message_seq), cp::files_list_response};
         struct sockaddr_in send_addr{};
@@ -292,7 +289,7 @@ public:
             send_message_udp(message, recv_addr, curr_data_len);
 
         close(sock);
-        cout << "All files matching given pattern has been sent" << endl;
+        BOOST_LOG_TRIVIAL(trace) << "All files matching given pattern has been sent";
     }
 
     vector<fs::path>::iterator find_file(const char* filename) {
@@ -309,14 +306,14 @@ public:
      * 3. Wait on this port for TCP connection with the client
      */
     void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
-        cout << "File request, filename = " << filename << endl;
+        BOOST_LOG_TRIVIAL(info)  << "File request, filename = " << filename;
 
         if (find_file(filename) != this->files_in_storage.end()) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename, tcp_port};
             send_message_udp(message, destination_address, strlen(filename));
-            cerr << "TCP port info sent" << endl;
+            BOOST_LOG_TRIVIAL(info) << "TCP port info sent";
         } else {
             cout << "Incorrect file request received" << endl;
         }
@@ -324,9 +321,9 @@ public:
 
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
             const char *filename, uint64_t file_size) {
-        cout << "File upload request, filename = " << filename << ", filesize = " << file_size << endl;
+        BOOST_LOG_TRIVIAL(info) << "File upload request, filename = " << filename << ", filesize = " << file_size;
         if (is_enough_space(file_size)) {
-            cout << "Accepting file upload request" << endl;
+            BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             // Send info about tcp port
@@ -334,14 +331,14 @@ public:
             send_message_udp(message, destination_address);
             upload_file_via_tcp(tcp_socket, filename);
         } else {
-            cerr << "Rejecting file upload request" << endl;
+            BOOST_LOG_TRIVIAL(info) << "Rejecting file upload request";
             SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
             send_message_udp(message, destination_address);
         }
     }
 
     void upload_file_via_tcp(int tcp_socket, const char* filename) {
-        cout << "Uploading file via tcp..." << endl;
+        BOOST_LOG_TRIVIAL(trace) << "Uploading file via tcp...";
 
         struct sockaddr_in source_address{};
         memset(&source_address, 0, sizeof(source_address));
@@ -360,7 +357,7 @@ public:
         if (close(sock) < 0)
             syserr("close");
 
-        cout << "Ending uploading file via tcp" << endl;
+        BOOST_LOG_TRIVIAL(trace) << "Ending uploading file via tcp";
     }
 
     void handle_remove_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
@@ -398,38 +395,72 @@ public:
 
     void run() {
         while (true) {
-            display_log_separator();
+            BOOST_LOG_TRIVIAL(info) << "Waiting for client...";
             auto [received_message, source_address] = receive_next_message();
             string_view message_command = get_message_command(received_message);
             if (message_command == cp::discover_request) {
                 auto *message = (SimpleMessage*) &received_message;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
                 handle_discover_request(source_address, be64toh(message->message_seq));
             } else if (message_command == cp::files_list_request) {
                 auto *message = (SimpleMessage*) &received_message;
-                cout << *message << endl;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
                 handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
             } else if (message_command == cp::file_get_request) {
                 auto *message = (SimpleMessage*) &received_message;
-                cout << *message << endl;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
                 handle_file_request(source_address, be64toh(message->message_seq), message->data);
             } else if (message_command == cp::file_add_request) {
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message;
                 handle_upload_request(source_address, be64toh(received_message.message_seq), received_message.data,
-                                      received_message.param);
+                                      be64toh(received_message.param));
             } else if (message_command == cp::file_remove_request) {
-                cout << received_message << endl;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message << endl;
                 handle_remove_request(source_address, be64toh(received_message.message_seq), received_message.data);
             }
         }
     }
+
+    friend ostream& operator << (ostream &out, const Server &server) {
+        out << "\nSERVER INFO:";
+        out << "\nMCAST_ADDR = " << server.multicast_address;
+        out << "\nCMD_PORT = " << server.cmd_port;
+        out << "\nMAX_SPACE = " << server.max_available_space;
+        out << "\nFOLDER = " << server.shared_folder;
+        out << "\nTIMEOUT = " << server.timeout;
+
+        return out;
+    }
 };
+
+void init() {
+    logging::register_simple_formatter_factory<logging::trivial::severity_level, char>("Severity");
+    logging::add_file_log
+            (
+                    logging::keywords::file_name = "logger_server.log",
+                    logging::keywords::rotation_size = 10 * 1024 * 1024,
+                    logging::keywords::time_based_rotation = logging::sinks::file::rotation_at_time_point(0, 0, 0),
+                    logging::keywords::format = "[%TimeStamp%] [tid=%ThreadID%] [%Severity%]: %Message%",
+                    logging::keywords::auto_flush = true
+            );
+    logging::add_common_attributes();
+//    boost::log::core::get()->set_filter
+//            (
+//                    logging::trivial::severity >= logging::trivial::info
+//            );
+
+  //  logging::core::get()->set_logging_enabled(false);
+}
+
 
 
 int main(int argc, const char *argv[]) {
+    init();
     struct ServerParameters server_parameters = parse_program_arguments(argc, argv);
-    server_parameters.display();
     Server server {server_parameters};
     server.init();
-    cout << "Starting server..." << endl;
+    BOOST_LOG_TRIVIAL(trace) << "Starting server...";
+    BOOST_LOG_TRIVIAL(trace) << server << endl;
     server.run();
 
     return 0;
