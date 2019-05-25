@@ -165,4 +165,12 @@ void display_log_separator() {
 
 size_t get_file_size(const std::string& file);
 
+static void set_socket_timeout(int socket, uint16_t microseconds = 1000) {
+    struct timeval timeval{};
+    timeval.tv_usec = 1000;
+
+    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
+        syserr("setsockopt 'SO_RCVTIMEO'");
+}
+
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

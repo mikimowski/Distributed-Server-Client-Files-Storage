@@ -272,9 +272,9 @@ public:
             syserr("inet_aton");
 
         uint64_t curr_data_len = 0;
-        string_view filename;
+        string filename;
         for (const fs::path& file : this->files_in_storage) {
-            filename = file.filename().generic_string();
+            filename = file.filename().string();
             if (is_substring(pattern, filename)) {
                 if (const_variables::max_simple_data_size > curr_data_len + filename.length()) {
                     fill_message_with_filename(message, &curr_data_len, file.filename().generic_string());
@@ -292,7 +292,7 @@ public:
         BOOST_LOG_TRIVIAL(trace) << "All files matching given pattern has been sent";
     }
 
-    vector<fs::path>::iterator find_file(const char* filename) {
+    vector<fs::path>::iterator find_file(const string& filename) {
         for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
             if (it->filename() == filename)
                 return it;
@@ -300,25 +300,65 @@ public:
         return this->files_in_storage.end();
     }
 
+    /*** DOWNLOAD ***/
+
+    void send_file_via_tcp(int tcp_socket, const string& filename) {
+        BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
+
+        struct sockaddr_in source_address{};
+        memset(&source_address, 0, sizeof(source_address));
+        socklen_t len = sizeof(source_address);
+
+        // TODO use a non blocking socket on accept and wait for timeout seconds...
+        int sock = accept(tcp_socket, (struct sockaddr*) &source_address, &len);
+
+        fs::path file_path{this->shared_folder + filename};
+        std::ifstream file_stream{file_path.c_str(), std::ios::binary};
+
+        if (file_stream.is_open()) {
+            char buffer[MAX_BUFFER_SIZE];
+            while (file_stream) {
+                file_stream.read(buffer, MAX_BUFFER_SIZE);
+                ssize_t length = file_stream.gcount();
+                if (write(sock, buffer, length) != length)
+                    syserr("partial write");
+            }
+            file_stream.close(); // TODO can throw
+        } else {
+            cerr << "File opening error" << endl; // TODO
+        }
+
+        if (close(sock) < 0)
+            syserr("close");
+        BOOST_LOG_TRIVIAL(trace) << "Sending file via tcp finished";
+        cout << "File " << filename << " sent" << endl;
+    }
+
     /**
      * 1. Select free port
      * 2. Send chosen port to the client
      * 3. Wait on this port for TCP connection with the client
      */
-    void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
-        BOOST_LOG_TRIVIAL(info)  << "File request, filename = " << filename;
-
+    void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const string& filename) {
+        BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename=" << filename;
         if (find_file(filename) != this->files_in_storage.end()) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
-            ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename, tcp_port};
-            send_message_udp(message, destination_address, strlen(filename));
+            ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename.c_str(), htobe64(tcp_port)};
+            send_message_udp(message, destination_address, filename.length());
+            send_file_via_tcp(tcp_socket, filename);
+
+            if (close(tcp_socket) < 0)
+                syserr("close");
             BOOST_LOG_TRIVIAL(info) << "TCP port info sent";
         } else {
             cout << "Incorrect file request received" << endl;
         }
+        BOOST_LOG_TRIVIAL(info)  << "Finished file request, filename=" << filename;
     }
 
+
+    /*** UPLOAD ***/
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
             const char *filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << "File upload request, filename = " << filename << ", filesize = " << file_size;

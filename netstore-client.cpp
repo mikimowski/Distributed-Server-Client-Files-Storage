@@ -143,14 +143,6 @@ class Client {
     // For each filename stores last source_ip from which it was received
     unordered_map<string, string> last_search_results;
 
-    static void set_socket_timeout(int socket, uint16_t microseconds = 1000) {
-        struct timeval timeval{};
-        timeval.tv_usec = 1000;
-
-        if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
-            syserr("setsockopt 'SO_RCVTIMEO'");
-    }
-
     static int create_multicast_udp_socket() {
         int mcast_udp_socket, optval;
 
@@ -483,6 +475,52 @@ class Client {
         return message_sequence;
     }
 
+    // TODO jakiś fałszywy server mógłby się podszyć... trzeba srpawdzić czy otrzymano faktycznie od tego...
+    static in_port_t receive_fetch_file_response(int udp_socket, uint64_t expected_message_sequence) {
+        struct ComplexMessage message{};
+        struct sockaddr_in source_address{};
+        socklen_t addr_length = sizeof(struct sockaddr_in);
+        ssize_t recv_len;
+
+        recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
+        if (recv_len > 0) {
+            string source_ip = inet_ntoa(source_address.sin_addr);
+            uint16_t source_port = be16toh(source_address.sin_port);
+            if (is_valid_message(message, expected_message_sequence) && is_expected_command(message.command, cp::file_get_response)) {
+                BOOST_LOG_TRIVIAL(info) << format("Get file response received: port=%1% filename=%2%, source=%3%:%4%")
+                                           %be64toh(message.param) %message.data %source_ip %source_port;
+            } else {
+                cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+            }
+        }
+
+        return be64toh(message.param);
+    }
+
+    void fetch_file_via_tcp(const char* server_ip, in_port_t server_port, const string& filename) {
+        BOOST_LOG_TRIVIAL(trace) << "Starting downloading file via tcp...";
+        int tcp_socket = create_and_connect_tcp_socket(server_ip, server_port);
+        size_t recv_len;
+
+        fs::path file_path(this->out_folder + filename);
+        fs::ofstream file_stream(file_path, std::ofstream::binary);
+        if (file_stream.is_open()) {
+            char buffer[MAX_BUFFER_SIZE];
+            while ((recv_len = read(tcp_socket, buffer, sizeof(buffer))) > 0) {
+                file_stream.write(buffer, recv_len);
+            }
+            file_stream.close();
+        } else {
+            cerr << "File creation failure" << endl;
+        }
+
+        if (close(tcp_socket) < 0)
+            syserr("close");
+        BOOST_LOG_TRIVIAL(trace) << "Downloading file via tcp finished";
+    }
+
+
+
     // TODO nie działa at all
     void fetch(const string& filename) {
         BOOST_LOG_TRIVIAL(trace) << format("Starting fetch, filename=%1%...") % filename;
@@ -501,8 +539,8 @@ class Client {
             string server_ip = this->last_search_results[filename];
             int unicast_socket = create_unicast_udp_socket();
             uint64_t expected_message_seq = send_get_file_message(unicast_socket, server_ip.c_str(), filename);
-            in_port_t tcp_port = receive_add_file_response(unicast_socket, expected_message_seq);
-            // TODO pobierz plik na danym tcp
+            in_port_t tcp_port = receive_fetch_file_response(unicast_socket, expected_message_seq);
+            fetch_file_via_tcp(server_ip.c_str(), tcp_port, filename);
         }
         BOOST_LOG_TRIVIAL(trace) << "Ending fetch";
     }
@@ -514,14 +552,24 @@ class Client {
     }
 
     /// return sent message's message_sequence
-    uint64_t send_add_file_request(int udp_socket, const char* destination_ip, const string &filename) {
+    uint64_t send_upload_file_request(int udp_socket, const char *destination_ip, const string &filename) {
         uint64_t message_sequence = generate_message_sequence();
         ComplexMessage message{htobe64(message_sequence), cp::file_add_request, filename.c_str(), htobe64(get_file_size(this->out_folder + filename))};
         send_message_unicast_udp(udp_socket, destination_ip, message, filename.length());
         return message_sequence;
     }
 
-    static in_port_t receive_add_file_response(int udp_socket, uint64_t expected_message_sequence) {
+    static ComplexMessage send_udp_message(int udp_socket, ComplexMessage message) {
+
+    }
+
+    static ComplexMessage receive_udp_message(int upd_socket, struct sockaddr_in source_address) {
+
+    }
+
+    // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
+
+    static ComplexMessage receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence) {
         struct ComplexMessage message{};
         struct sockaddr_in source_address{};
         socklen_t addr_length = sizeof(struct sockaddr_in);
@@ -531,27 +579,28 @@ class Client {
         if (recv_len > 0) {
             string source_ip = inet_ntoa(source_address.sin_addr);
             uint16_t source_port = be16toh(source_address.sin_port);
-            if (is_valid_message(message, expected_message_sequence) && is_expected_command(message.command, cp::file_get_response)) {
+            if (is_valid_message(message, expected_message_sequence) && is_expected_command(message.command, cp::file_add_acceptance)) {
                 BOOST_LOG_TRIVIAL(info) << format("Get file response received: port=%1% filename=%2%, source=%3%:%4%")
                                            %be64toh(message.param) %message.data %source_ip %source_port;
             } else {
-                cerr << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+                cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
             }
         }
 
-        return message.param;
+        return message;
     }
 
     /**
-     * Sends UDP packet with file_add_request
+     *
      * @param server_ip
      * @param filename
-     * @return
+     * @return If acceptect tcp_port on which server expects connection in order to upload file
+     *         -1 otherwise
      */
     ComplexMessage ask_server_to_upload_file(const char* server_ip, const char* filename) {
         int udp_socket = create_multicast_udp_socket();
-        uint64_t message_sequence = send_add_file_request(udp_socket, server_ip, filename);
-        return receive_add_file_response(udp_socket, message_sequence);
+        uint64_t message_sequence = send_upload_file_request(udp_socket, server_ip, filename);
+        return receive_upload_file_response(udp_socket, message_sequence);
     }
 
     static int create_and_connect_tcp_socket(const char* destination_ip, uint16_t destination_port) {
