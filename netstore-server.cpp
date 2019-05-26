@@ -4,6 +4,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/format.hpp>
 
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
@@ -12,7 +13,6 @@
 
 #include <vector>
 #include <random>
-
 #include <tuple>
 
 #include <unistd.h>
@@ -46,8 +46,6 @@ constexpr uint16_t default_timeout = 5;
 constexpr uint16_t max_timeout = 300;
 constexpr uint64_t default_max_disc_space = 52428800;
 
-#define MAX_QUEUE_LENGTH 5
-
 using std::string;
 using std::cout;
 using std::endl;
@@ -57,6 +55,8 @@ using std::vector;
 using std::string_view;
 using std::tuple;
 using std::ostream;
+using boost::format;
+
 
 namespace fs = boost::filesystem;
 namespace po = boost::program_options;
@@ -126,10 +126,6 @@ class Server {
     /*** Receiving ***/
     int recv_socket;
     struct ip_mreq ip_mreq;
-
-    /*** Sending ***/
-    int send_socket;
-
 
     // TODO: Ask whether directories should be listed
     void generate_files_in_storage() {
@@ -219,7 +215,7 @@ public:
         return file_size <= this->get_available_space();
     }
 
-    void send_message_udp(const SimpleMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
+    static void send_message_udp(const SimpleMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -231,7 +227,7 @@ public:
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
-    void send_message_udp(const ComplexMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
+    static void send_message_udp(const ComplexMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::complex_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -243,12 +239,19 @@ public:
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
+    /*************************************************** DISCOVER *****************************************************/
+
     void handle_discover_request(struct sockaddr_in &destination_address, uint64_t message_seq) {
-        struct ComplexMessage message{htobe64(message_seq), cp::discover_response, this->multicast_address.c_str(), htobe64(this->get_available_space())};
-        BOOST_LOG_TRIVIAL(info) << "Sending to: " << inet_ntoa(destination_address.sin_addr) << ":" << ntohs(destination_address.sin_port);
-        BOOST_LOG_TRIVIAL(info) << "Message send: " << message;
-        send_message_udp(message, destination_address, const_variables::max_command_length + 2 * sizeof(uint64_t) + this->multicast_address.length());
+        struct ComplexMessage message{htobe64(message_seq), cp::discover_response,
+                this->multicast_address.c_str(), htobe64(this->get_available_space())};
+        BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
+                                        %inet_ntoa(destination_address.sin_addr) % ntohs(destination_address.sin_port);
+        BOOST_LOG_TRIVIAL(info) << "Message sent: " << message;
+        send_message_udp(message, destination_address,
+                const_variables::max_command_length + 2 * sizeof(uint64_t) + this->multicast_address.length());
     }
+
+    /************************************************** FILES LIST ****************************************************/
 
     static void fill_message_with_filename(struct SimpleMessage& msg_send, uint64_t *start_index, const string& filename) {
         strcpy(msg_send.data + *start_index, filename.c_str());
@@ -300,7 +303,7 @@ public:
         return this->files_in_storage.end();
     }
 
-    /*** DOWNLOAD ***/
+    /************************************************* DOWNLOAD FILE **************************************************/
 
     void send_file_via_tcp(int tcp_socket, const string& filename) {
         BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
@@ -358,7 +361,7 @@ public:
     }
 
 
-    /*** UPLOAD ***/
+    /**************************************************** UPLOAD ******************************************************/
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
             const char *filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << "File upload request, filename = " << filename << ", filesize = " << file_size;
@@ -400,9 +403,22 @@ public:
         BOOST_LOG_TRIVIAL(trace) << "Ending uploading file via tcp";
     }
 
-    void handle_remove_request(struct sockaddr_in &destination_address, uint64_t message_seq, const char *filename) {
+    /**************************************************** REMOVE ******************************************************/
 
+    void handle_remove_request(const string& filename) {
+        auto it = find_file(filename);
+        string file = this->shared_folder + filename;
+        if (it != this->files_in_storage.end()) {
+            BOOST_LOG_TRIVIAL(info) << "Deleting file, filename = " << filename;
+            this->files_in_storage.erase(it);
+            this->used_space -= fs::file_size(file);
+            fs::remove(file);
+        } else {
+            BOOST_LOG_TRIVIAL(info) << "Skipping deleting file, no such file in storage";
+        }
     }
+
+    /****************************************************** RUN *******************************************************/
 
     /// Rzuca wyjątek jeśli incorrect message command
     static const char* get_message_command(const ComplexMessage& message) {
@@ -438,25 +454,25 @@ public:
             BOOST_LOG_TRIVIAL(info) << "Waiting for client...";
             auto [received_message, source_address] = receive_next_message();
             string_view message_command = get_message_command(received_message);
-            if (message_command == cp::discover_request) {
-                auto *message = (SimpleMessage*) &received_message;
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
-                handle_discover_request(source_address, be64toh(message->message_seq));
-            } else if (message_command == cp::files_list_request) {
-                auto *message = (SimpleMessage*) &received_message;
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
-                handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
-            } else if (message_command == cp::file_get_request) {
-                auto *message = (SimpleMessage*) &received_message;
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
-                handle_file_request(source_address, be64toh(message->message_seq), message->data);
-            } else if (message_command == cp::file_add_request) {
+            if (message_command == cp::file_add_request) {
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message;
                 handle_upload_request(source_address, be64toh(received_message.message_seq), received_message.data,
                                       be64toh(received_message.param));
-            } else if (message_command == cp::file_remove_request) {
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message << endl;
-                handle_remove_request(source_address, be64toh(received_message.message_seq), received_message.data);
+            } else {
+                auto *message = (SimpleMessage*) &received_message;
+                if (message_command == cp::discover_request) {
+                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
+                    handle_discover_request(source_address, be64toh(message->message_seq));
+                } else if (message_command == cp::files_list_request) {
+                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
+                    handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
+                } else if (message_command == cp::file_get_request) {
+                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
+                    handle_file_request(source_address, be64toh(message->message_seq), message->data);
+                } else if (message_command == cp::file_remove_request) {
+                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
+                    handle_remove_request(message->data);
+                }
             }
         }
     }

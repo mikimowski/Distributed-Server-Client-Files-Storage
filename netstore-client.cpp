@@ -5,12 +5,13 @@
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
-#include <boost/format.hpp>
+
 
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
+#include <boost/format.hpp>
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -254,7 +255,7 @@ class Client {
         BOOST_LOG_TRIVIAL(info) << "unicast udp message sent";
     }
 
-    /*** DISCOVER SERVERS ***/
+    /*************************************************** DISCOVER *****************************************************/
 
     void display_server_discovered_info(const char* server_ip, const char* server_mcast_addr, uint64_t server_space) {
         cout << "Found " << server_ip << " (" << server_mcast_addr << ") with free space " << server_space << endl;
@@ -362,7 +363,7 @@ class Client {
         return servers;
     }
 
-    /*** GET FILES LIST ***/
+    /************************************************ GET FILES LIST **************************************************/
 
     void display_files_list(string_view data, uint32_t list_length, const char* source_ip) {
 //        int i = 0;
@@ -467,7 +468,7 @@ class Client {
         BOOST_LOG_TRIVIAL(info) << "Search finished";
     }
 
-    /*** GET FILE ***/
+    /************************************************** FETCH FILE ****************************************************/
     uint64_t send_get_file_message(int udp_socket, const char* destination_ip, const string &filename) {
         uint64_t message_sequence = generate_message_sequence();
         SimpleMessage message{htobe64(message_sequence), cp::file_get_request, filename.c_str()};
@@ -545,7 +546,7 @@ class Client {
         BOOST_LOG_TRIVIAL(trace) << "Ending fetch";
     }
 
-    /*** ADD FILE ***/
+    /*************************************************** ADD FILE *****************************************************/
 
     static bool can_upload_file(ComplexMessage server_response) {
         return strcmp(server_response.command, cp::file_add_acceptance) == 0;
@@ -568,7 +569,6 @@ class Client {
     }
 
     // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
-
     static ComplexMessage receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence) {
         struct ComplexMessage message{};
         struct sockaddr_in source_address{};
@@ -685,16 +685,18 @@ class Client {
         BOOST_LOG_TRIVIAL(trace) << "Ending upload procedure...";
     }
 
-    /*** REMOVE FILE ***/
+    /************************************************* REMOVE FILE ****************************************************/
     void remove(const string& filename) {
+        BOOST_LOG_TRIVIAL(trace) << "Starting remove file";
         SimpleMessage message {htobe64(generate_message_sequence()), cp::file_remove_request, filename.c_str()};
         int udp_socket = create_multicast_udp_socket(); // TODO i tu ładny try catch na tworzenie ;)
         send_message_multicast_udp(udp_socket, message, filename.length());
         if (close(udp_socket))
             syserr("close");
+        BOOST_LOG_TRIVIAL(trace) << "Ending remove file";
     }
 
-    /*** EXIT ***/
+    /***************************************************** EXIT *******************************************************/
     void exit() {
 
     }
