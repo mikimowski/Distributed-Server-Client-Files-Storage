@@ -1,27 +1,24 @@
 #include <iostream>
 #include <chrono>
 #include <random>
+#include <unordered_map>
+#include <fstream>
+#include <thread>
 
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
-
-
+#include <boost/format.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
-#include <boost/format.hpp>
 
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-
-#include <unordered_map>
-#include <fstream>
-#include <thread>
 
 #include "err.h"
 #include "helper.h"
@@ -189,7 +186,7 @@ class Client {
     static bool is_valid_message(SimpleMessage message, uint64_t expected_message_seq) {
         if (be64toh(message.message_seq) != expected_message_seq)
             return false;
-        if (!is_correct_string(message.data, const_variables::max_simple_data_size))
+        if (!is_valid_string(message.data, const_variables::max_simple_data_size))
             return false;
         return true;
     }
@@ -197,7 +194,7 @@ class Client {
     static bool is_valid_message(ComplexMessage message, uint64_t expected_message_seq) {
         if (be64toh(message.message_seq) != expected_message_seq)
             return false;
-        if (!is_correct_string(message.data, const_variables::max_complex_data_size))
+        if (!is_valid_string(message.data, const_variables::max_complex_data_size))
             return false;
         return true;
     }
@@ -549,7 +546,7 @@ class Client {
     /*************************************************** ADD FILE *****************************************************/
 
     static bool can_upload_file(ComplexMessage server_response) {
-        return strcmp(server_response.command, cp::file_add_acceptance) == 0;
+        return server_response.command == cp::file_add_acceptance;
     }
 
     /// return sent message's message_sequence

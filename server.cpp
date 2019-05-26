@@ -1,19 +1,17 @@
-#include <utility>
-
 #include <iostream>
+#include <utility>
+#include <vector>
+#include <random>
+#include <tuple>
+
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
-
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
-
-#include <vector>
-#include <random>
-#include <tuple>
 
 #include <unistd.h>
 #include <stdint.h>
@@ -56,7 +54,7 @@ using std::string_view;
 using std::tuple;
 using std::ostream;
 using boost::format;
-
+using std::exception;
 
 namespace fs = boost::filesystem;
 namespace po = boost::program_options;
@@ -129,56 +127,16 @@ class Server {
 
     // TODO: Ask whether directories should be listed
     void generate_files_in_storage() {
+        if (!fs::exists(this->shared_folder))
+            throw std::invalid_argument("Shared folder doesn't exists");
+        if (!fs::is_directory(this->shared_folder))
+            throw std::invalid_argument("Shared folder is not a directory");
         for (const auto& path: fs::directory_iterator(this->shared_folder)) {
           if (fs::is_regular_file(path)) {
                 files_in_storage.emplace_back(path.path());
                 this->used_space += fs::file_size(path.path());
            }
         }
-    }
-
-    uint64_t get_available_space() {
-        return this->used_space > this->max_available_space ? 0 : this->max_available_space - this->used_space;
-    }
-
-    static tuple<int, in_port_t> create_tcp_socket() {
-        int tcp_socket;
-        struct sockaddr_in local_addr{};
-        socklen_t addrlen = sizeof(local_addr);
-        memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
-        local_addr.sin_family = AF_INET;
-        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-            syserr("socket");
-        if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
-            syserr("bind");
-        if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
-            syserr("listen");
-        if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
-            syserr("getsockname");
-        in_port_t tcp_port = be16toh(local_addr.sin_port);
-
-        BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
-        return {tcp_socket, tcp_port};
-    }
-
-public:
-    Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
-        : multicast_address(std::move(mcast_addr)),
-        cmd_port(cmd_port),
-        max_available_space(max_available_space),
-        shared_folder(move(shared_folder_path)),
-        timeout(timeout)
-        {}
-
-    Server(const struct ServerParameters& server_parameters)
-        : Server(server_parameters.mcast_addr, server_parameters.cmd_port, server_parameters.max_space,
-                server_parameters.shared_folder, server_parameters.timeout)
-        {}
-
-    void init() {
-        generate_files_in_storage();
-        init_recv_socket();
     }
 
     void init_recv_socket() {
@@ -211,8 +169,33 @@ public:
             syserr("setsockopt");
     }
 
+    uint64_t get_available_space() {
+        return this->used_space > this->max_available_space ? 0 : this->max_available_space - this->used_space;
+    }
+
     bool is_enough_space(uint64_t file_size) {
         return file_size <= this->get_available_space();
+    }
+
+    static tuple<int, in_port_t> create_tcp_socket() {
+        int tcp_socket;
+        struct sockaddr_in local_addr{};
+        socklen_t addrlen = sizeof(local_addr);
+        memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+            syserr("socket");
+        if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
+            syserr("bind");
+        if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
+            syserr("listen");
+        if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
+            syserr("getsockname");
+        in_port_t tcp_port = be16toh(local_addr.sin_port);
+
+        BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
+        return {tcp_socket, tcp_port};
     }
 
     static void send_message_udp(const SimpleMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
@@ -239,16 +222,39 @@ public:
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
+
+public:
+    Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
+        : multicast_address(std::move(mcast_addr)),
+        cmd_port(cmd_port),
+        max_available_space(max_available_space),
+        shared_folder(move(shared_folder_path)),
+        timeout(timeout)
+        {}
+
+    Server(const struct ServerParameters& server_parameters)
+        : Server(server_parameters.mcast_addr, server_parameters.cmd_port, server_parameters.max_space,
+                server_parameters.shared_folder, server_parameters.timeout)
+        {}
+
+    void init() {
+        BOOST_LOG_TRIVIAL(trace) << "Starting server initialization...";
+        generate_files_in_storage();
+        init_recv_socket();
+        BOOST_LOG_TRIVIAL(trace) << "Server initialization ended";
+    }
+
+
     /*************************************************** DISCOVER *****************************************************/
 
     void handle_discover_request(struct sockaddr_in &destination_address, uint64_t message_seq) {
         struct ComplexMessage message{htobe64(message_seq), cp::discover_response,
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
         BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
-                                        %inet_ntoa(destination_address.sin_addr) % ntohs(destination_address.sin_port);
-        BOOST_LOG_TRIVIAL(info) << "Message sent: " << message;
+                                        %inet_ntoa(destination_address.sin_addr) %ntohs(destination_address.sin_port);
         send_message_udp(message, destination_address,
-                const_variables::max_command_length + 2 * sizeof(uint64_t) + this->multicast_address.length());
+                const_variables::complex_message_no_data_size + this->multicast_address.length());
+        BOOST_LOG_TRIVIAL(info) << "Message sent: " << message;
     }
 
     /************************************************** FILES LIST ****************************************************/
@@ -420,20 +426,27 @@ public:
 
     /****************************************************** RUN *******************************************************/
 
-    /// Rzuca wyjątek jeśli incorrect message command
-    static const char* get_message_command(const ComplexMessage& message) {
-        if (strcmp(message.command, cp::discover_request) == 0)
-            return cp::discover_request;
-        else if (strcmp(message.command, cp::files_list_request) == 0)
-            return cp::files_list_request;
-        else if (strcmp(message.command, cp::file_add_request) == 0)
-            return cp::file_add_request;
-        else if (strcmp(message.command, cp::file_get_request) == 0)
-            return cp::file_get_request;
-        else if (strcmp(message.command, cp::file_remove_request) == 0)
-            return cp::file_remove_request;
-        else
-            throw ("Unknown command expection");
+    /**
+     * Returns message's command.
+     * @throw invalid_command excpetion if message's command is incorrect or unknown.
+     * @param message - message which command is to be extracted.
+     * @return string representing message's command.
+     */
+    static string get_message_command(const ComplexMessage& message) {
+        if (is_valid_string(message.command, const_variables::max_command_length)) {
+            if (message.command == cp::discover_request)
+                return cp::discover_request;
+            else if (message.command == cp::files_list_request)
+                return cp::files_list_request;
+            else if (message.command == cp::file_add_request)
+                return cp::file_add_request;
+            else if (message.command == cp::file_get_request)
+                return cp::file_get_request;
+            else if (message.command == cp::file_remove_request)
+                return cp::file_remove_request;
+        }
+
+        throw invalid_command();
     }
 
     tuple<ComplexMessage, struct sockaddr_in> receive_next_message() {
@@ -450,27 +463,39 @@ public:
     }
 
     void run() {
+        string source_ip;
+        string source_port;
+        string_view message_command;
+
         while (true) {
             BOOST_LOG_TRIVIAL(info) << "Waiting for client...";
             auto [received_message, source_address] = receive_next_message();
-            string_view message_command = get_message_command(received_message);
+            source_ip = inet_ntoa(source_address.sin_addr);
+            source_port = be16toh(source_address.sin_port);
+
+            try {
+                message_command = get_message_command(received_message);
+            } catch (const invalid_command& e) {
+                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port << endl;
+                BOOST_LOG_TRIVIAL(info) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                continue;
+            }
+
             if (message_command == cp::file_add_request) {
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message;
                 handle_upload_request(source_address, be64toh(received_message.message_seq), received_message.data,
                                       be64toh(received_message.param));
             } else {
                 auto *message = (SimpleMessage*) &received_message;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
+
                 if (message_command == cp::discover_request) {
-                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
                     handle_discover_request(source_address, be64toh(message->message_seq));
                 } else if (message_command == cp::files_list_request) {
-                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
                     handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
                 } else if (message_command == cp::file_get_request) {
-                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
                     handle_file_request(source_address, be64toh(message->message_seq), message->data);
                 } else if (message_command == cp::file_remove_request) {
-                    BOOST_LOG_TRIVIAL(info) << "Message received: " << *message << endl;
                     handle_remove_request(message->data);
                 }
             }
@@ -509,15 +534,18 @@ void init() {
 }
 
 
-
 int main(int argc, const char *argv[]) {
     init();
     struct ServerParameters server_parameters = parse_program_arguments(argc, argv);
     Server server {server_parameters};
-    server.init();
-    BOOST_LOG_TRIVIAL(trace) << "Starting server...";
-    BOOST_LOG_TRIVIAL(trace) << server << endl;
-    server.run();
+    try {
+        server.init();
+        BOOST_LOG_TRIVIAL(trace) << "Starting server...";
+        BOOST_LOG_TRIVIAL(trace) << server << endl;
+        server.run();
+    } catch (const exception& e) {
+        cerr << e.what() << endl;
+    }
 
     return 0;
 }

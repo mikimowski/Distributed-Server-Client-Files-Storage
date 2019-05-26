@@ -1,12 +1,16 @@
-TARGET: netstore-server netstore-client
+TARGET: netstore-client netstore-server
 
+CC	= g++
+CFLAGS	= -std=c++17 -Wall -Werror
+LFLAGS	= -lboost_system -lboost_program_options -lboost_filesystem -lboost_log_setup -lboost_log -lboost_thread -lpthread
 
+all: netstore-client netstore-server
 
-netstore-server:
-	g++ -std=c++17 -L/usr/bin -lboost_log_setup -lboost_program_options -lboost_filesystem -lboost_system -o netstore-server netstore-server.cpp
+netstore-server: server.cpp
+	$(CC) $(CFLAGS) $^ $(LFLAGS) -o $@
 
-netstore-client:
-	g++ -std=c++17 -L/usr/bin -lboost_log_setup -lboost_program_options -lboost_filesystem -lboost_system -o netstore-client netstore-client.cpp
+netstore-client: client.cpp
+	$(CC) $(CFLAGS) $^ $(LFLAGS) -o $@
 
 .PHONY: clean TARGET
 clean:

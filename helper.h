@@ -16,16 +16,16 @@ namespace const_variables { // TODO
 }
 
 namespace communication_protocol {
-    const char* discover_request = "HELLO";
-    const char* discover_response = "GOOD_DAY";
-    const char* files_list_request = "LIST";
-    const char* files_list_response = "MY_LIST";
-    const char* file_get_request = "GET";
-    const char* file_get_response = "CONNECT_ME";
-    const char* file_remove_request = "DEL";
-    const char* file_add_request = "ADD";
-    const char* file_add_refusal = "NO_WAY";
-    const char* file_add_acceptance = "CAN_ADD";
+    const std::string discover_request = "HELLO";
+    const std::string discover_response = "GOOD_DAY";
+    const std::string files_list_request = "LIST";
+    const std::string files_list_response = "MY_LIST";
+    const std::string file_get_request = "GET";
+    const std::string file_get_response = "CONNECT_ME";
+    const std::string file_remove_request = "DEL";
+    const std::string file_add_request = "ADD";
+    const std::string file_add_refusal = "NO_WAY";
+    const std::string file_add_acceptance = "CAN_ADD";
 }
 
 
@@ -128,8 +128,23 @@ struct __attribute__((__packed__)) SimpleMessage {
     }
 };
 
+/**
+ * Checks whether given string is filled with '\0' from starting index included to the end index excluded
+ * str[start; end)
+ * @param str
+ * @param start
+ * @param end
+ * @return
+ */
+bool is_empty(const char* str, size_t start, size_t end) {
+    for (size_t  i = start; i < end; i++)
+        if (str[i] != '\0')
+            return false;
+    return true;
+}
+
 /// Must be ended with '\0'
-bool is_correct_string(const char* str, uint64_t max_len) {
+bool is_valid_string(const char *str, uint64_t max_len) {
     uint64_t i = 0;
     while (i < max_len && str[i] != '\0')
         i++;
@@ -151,6 +166,7 @@ bool is_correct_files_list(const char* str, uint64_t max_len) {
     return str[max_len - 1] == '\0' || str[max_len - 1] == '\n';
 }
 
+
 /**
  * @return True if given pattern is a substring of given string,
  *         false otherwise
@@ -167,10 +183,17 @@ size_t get_file_size(const std::string& file);
 
 static void set_socket_timeout(int socket, uint16_t microseconds = 1000) {
     struct timeval timeval{};
-    timeval.tv_usec = 1000;
+    timeval.tv_usec = microseconds;
 
     if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
         syserr("setsockopt 'SO_RCVTIMEO'");
 }
+
+class invalid_command : public std::invalid_argument {
+public:
+    invalid_command(const std::string& message = "Invalid command")
+    : invalid_argument(message)
+    {}
+};
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H
