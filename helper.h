@@ -1,3 +1,5 @@
+#include <utility>
+
 #ifndef DISTRIBUTED_FILES_STORAGE_HELPER_H
 #define DISTRIBUTED_FILES_STORAGE_HELPER_H
 
@@ -12,7 +14,6 @@ namespace const_variables { // TODO
     constexpr int max_complex_data_size = max_simple_data_size - sizeof(uint64_t); // 2^16 = IP packet has 16 bits, UDP provides datagram as a part of IP packet 65489
     constexpr uint16_t simple_message_no_data_size = const_variables::max_command_length + sizeof(uint64_t);
     constexpr uint16_t complex_message_no_data_size = const_variables::max_command_length + 2 * sizeof(uint64_t);
-    constexpr int random_seed = 0;
 }
 
 namespace communication_protocol {
@@ -33,18 +34,16 @@ struct __attribute__((__packed__)) ComplexMessage {
     char command[const_variables::max_command_length];
     uint64_t message_seq;
     uint64_t param;
-    char data[const_variables::max_complex_data_size];
+    char data[const_variables::max_complex_data_size + 1];
 
     ComplexMessage() {
         init();
     }
 
-    ComplexMessage(uint64_t message_seq, const std::string_view& command, const char *data = "", uint64_t param = 0) {
+    ComplexMessage(uint64_t message_seq, const std::string& command, const char *data = "", uint64_t param = 0) {
         init();
         this->message_seq = message_seq;
-        for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < command.length())
-                this->command[i] = command[i];
+        strcpy(this->command, command.c_str());
         strcpy(this->data, data);
         this->param = param;
     }
@@ -52,27 +51,12 @@ struct __attribute__((__packed__)) ComplexMessage {
     void init() {
         message_seq = 0;
         param = 0;
-        for (char& i : command)
-            i = '\0';
-        for (char& i : data)
-            i = '\0';
+        memset(&command, '\0', const_variables::max_command_length);
+        memset(&data, '\0', const_variables::max_complex_data_size + 1);
     }
 
-    void set_message(const std::string_view &msg) {
-        for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < msg.length())
-                this->command[i] = msg[i];
-    }
-
-    void fill_message(const std::string_view& msg, const char* data = "", uint64_t param = 0) {
-        init();
-        set_message(msg);
-        strcpy(this->data, data);
-        this->param = param;
-    }
-
-    friend std::ostream& operator << (std::ostream &out, ComplexMessage& rhs) {
-        out << "[COMMAND = "<< rhs.command<< "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [PARAM = " << rhs.param << "] [DATA = " << rhs.data << "]";
+    friend std::ostream& operator << (std::ostream& out, ComplexMessage& rhs) {
+        out << "[COMMAND = "<< rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [PARAM = " << rhs.param << "] [DATA = " << rhs.data << "]";
         return out;
     }
 };
@@ -81,52 +65,32 @@ struct __attribute__((__packed__)) ComplexMessage {
 struct __attribute__((__packed__)) SimpleMessage {
     char command[const_variables::max_command_length];
     uint64_t message_seq;
-    char data[const_variables::max_simple_data_size];
+    char data[const_variables::max_simple_data_size + 1];
 
     SimpleMessage() {
         init();
     }
 
-    SimpleMessage(uint64_t message_seq, const std::string_view& command, const char *data = "") {
+    SimpleMessage(uint64_t message_seq, const std::string& command, const char* data = "") {
         init();
         this->message_seq = message_seq;
-        for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < command.length())
-                this->command[i] = command[i];
+        strcpy(this->command, command.c_str());
         strcpy(this->data, data);
     }
-
-//    SimpleMessage(const ComplexMessage& message) {
-//        strcpy(this->command, message.command);
-//        this->message_seq = message.message_seq;
-//        strcpy(this->data, message.data);
-//    }
 
     void init() {
         message_seq = 0;
-        for (char& i : command)
-            i = '\0';
-        for (char& i : data)
-            i = '\0';
+        memset(&command, '\0', const_variables::max_command_length);
+        memset(&data, '\0', const_variables::max_simple_data_size + 1);
     }
 
-    void set_message(const std::string_view &msg) {
-        for (int i = 0; i < const_variables::max_command_length; i++)
-            if (i < msg.length())
-                this->command[i] = msg[i];
-    }
-
-    void fill_message(const std::string_view& msg, const char* data = "") {
-        init();
-        set_message(msg);
-        strcpy(this->data, data);
-    }
-
-    friend std::ostream& operator << (std::ostream &out, SimpleMessage& rhs) {
-        out << "[COMMAND = "<< rhs.command<< "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [DATA = " << rhs.data << "]";
+    friend std::ostream& operator << (std::ostream& out, SimpleMessage& rhs) {
+        out << "[COMMAND = "<< rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq <<"] [DATA = " << rhs.data << "]";
         return out;
     }
 };
+
+
 
 /**
  * Checks whether given string is filled with '\0' from starting index included to the end index excluded
@@ -155,15 +119,12 @@ bool is_valid_string(const char *str, uint64_t max_len) {
     return str[max_len - 1] == '\0';
 }
 
-bool is_correct_files_list(const char* str, uint64_t max_len) {
+bool is_valid_data(const char *data, uint64_t length) {
     uint64_t i = 0;
-    while (i < max_len && str[i] != '\0')
-        i++;
-
-    while (i < max_len)
-        if (str[i++] != '\0')
+    while (i < length)
+        if (data[i++] == '\0')
             return false;
-    return str[max_len - 1] == '\0' || str[max_len - 1] == '\n';
+    return true;
 }
 
 
@@ -171,7 +132,7 @@ bool is_correct_files_list(const char* str, uint64_t max_len) {
  * @return True if given pattern is a substring of given string,
  *         false otherwise
  */
-bool is_substring(char const* pattern, const std::string_view& str) {
+bool is_substring(char const* pattern, const std::string& str) {
     return str.find(pattern) != std::string::npos;
 }
 
@@ -181,19 +142,30 @@ void display_log_separator() {
 
 size_t get_file_size(const std::string& file);
 
-static void set_socket_timeout(int socket, uint16_t microseconds = 1000) {
-    struct timeval timeval{};
-    timeval.tv_usec = microseconds;
+void set_socket_timeout(int socket, uint16_t microseconds = 1000);
 
-    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
-        syserr("setsockopt 'SO_RCVTIMEO'");
-}
-
-class invalid_command : public std::invalid_argument {
+class invalid_command : public std::exception {
+    const std::string message;
 public:
-    invalid_command(const std::string& message = "Invalid command")
-    : invalid_argument(message)
+    invalid_command(std::string message = "Invalid command")
+    : message(std::move(message))
     {}
+
+    virtual const char* what() const throw() {
+        return this->message.c_str();
+    }
+};
+
+class invalid_message : public std::exception {
+    const std::string message;
+public:
+    invalid_message(std::string message = "Invalid message")
+    : message(std::move(message))
+    {}
+
+    virtual const char* what() const throw() {
+        return this->message.c_str();
+    }
 };
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

@@ -19,5 +19,5 @@ target_link_libraries(netstore-server1 Boost::filesystem Boost::log -lpthread Bo
 target_link_libraries(netstore-client Boost::filesystem Boost::log -lpthread Boost::program_options)
 #TARGET_LINK_LIBRARIES(netstore-client LINK_PUBLIC ${Boost_LIBRARIES})
 #TARGET_LINK_LIBRARIES(netstore-server1 LINK_PUBLIC ${Boost_LIBRARIES})
-TARGET_LINK_LIBRARIES(netstore-server2 LINK_PUBLIC ${Boost_LIBRARIES})
+TARGET_LINK_LIBRARIES(netstore-server2 LINK_PUBLIC -lpthread  ${Boost_LIBRARIES})
 TARGET_LINK_LIBRARIES(main LINK_PUBLIC ${Boost_LIBRARIES})

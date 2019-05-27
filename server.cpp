@@ -3,6 +3,7 @@
 #include <vector>
 #include <random>
 #include <tuple>
+#include <thread>
 
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
@@ -21,8 +22,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
-#include "err.h"
 #include "helper.h"
+#include "err.h"
 
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
@@ -55,6 +56,7 @@ using std::tuple;
 using std::ostream;
 using boost::format;
 using std::exception;
+using std::thread;
 
 namespace fs = boost::filesystem;
 namespace po = boost::program_options;
@@ -169,17 +171,9 @@ class Server {
             syserr("setsockopt");
     }
 
-    uint64_t get_available_space() {
-        return this->used_space > this->max_available_space ? 0 : this->max_available_space - this->used_space;
-    }
-
-    bool is_enough_space(uint64_t file_size) {
-        return file_size <= this->get_available_space();
-    }
-
     static tuple<int, in_port_t> create_tcp_socket() {
         int tcp_socket;
-        struct sockaddr_in local_addr{};
+        struct sockaddr_in local_addr {};
         socklen_t addrlen = sizeof(local_addr);
         memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
         local_addr.sin_family = AF_INET;
@@ -198,7 +192,7 @@ class Server {
         return {tcp_socket, tcp_port};
     }
 
-    static void send_message_udp(const SimpleMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
+    static void send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -210,7 +204,7 @@ class Server {
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
-    static void send_message_udp(const ComplexMessage &message, struct sockaddr_in &destination_address, uint16_t data_length = 0) {
+    static void send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::complex_message_no_data_size + data_length;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -222,6 +216,21 @@ class Server {
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
+    uint64_t get_available_space() {
+        return this->used_space > this->max_available_space ? 0 : this->max_available_space - this->used_space;
+    }
+
+    bool is_enough_space(uint64_t file_size) {
+        return file_size <= this->get_available_space();
+    }
+
+    vector<fs::path>::iterator find_file(const string& filename) {
+        for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
+            if (it->filename() == filename)
+                return it;
+
+        return this->files_in_storage.end();
+    }
 
 public:
     Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
@@ -247,11 +256,12 @@ public:
 
     /*************************************************** DISCOVER *****************************************************/
 
-    void handle_discover_request(struct sockaddr_in &destination_address, uint64_t message_seq) {
-        struct ComplexMessage message{htobe64(message_seq), cp::discover_response,
+    // TODO multicast mabyć w jakim formacie przesłany??
+    void handle_discover_request(const struct sockaddr_in& destination_address, uint64_t message_seq) {
+        struct ComplexMessage message {htobe64(message_seq), cp::discover_response,
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
         BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
-                                        %inet_ntoa(destination_address.sin_addr) %ntohs(destination_address.sin_port);
+                                        %inet_ntoa(destination_address.sin_addr) %be16toh(destination_address.sin_port);
         send_message_udp(message, destination_address,
                 const_variables::complex_message_no_data_size + this->multicast_address.length());
         BOOST_LOG_TRIVIAL(info) << "Message sent: " << message;
@@ -259,29 +269,30 @@ public:
 
     /************************************************** FILES LIST ****************************************************/
 
-    static void fill_message_with_filename(struct SimpleMessage& msg_send, uint64_t *start_index, const string& filename) {
+    static void fill_message_with_filename(struct SimpleMessage& msg_send, uint64_t* start_index, const string& filename) {
+        if (*start_index > 0)
+            msg_send.data[(*start_index)++] = '\n';
         strcpy(msg_send.data + *start_index, filename.c_str());
         *start_index += filename.length();
-        msg_send.data[(*start_index)++] = '\n';
     }
 
-    void handle_files_list_request(struct sockaddr_in &recv_addr, uint64_t message_seq, const char *pattern) {
+    void handle_files_list_request(const struct sockaddr_in& recv_addr, uint64_t message_seq, const char *pattern) {
         BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
         int sock;
-        struct SimpleMessage message{htobe64(message_seq), cp::files_list_response};
-        struct sockaddr_in send_addr{};
-
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
             syserr("socket");
 
-        in_port_t remote_port = cmd_port;
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(remote_port);
-        if (inet_aton(multicast_address.c_str(), &send_addr.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
-            syserr("inet_aton");
+        { // TODO czy to aby na pewno tak...
+            struct sockaddr_in destination_address{};
+            destination_address.sin_family = AF_INET;
+            destination_address.sin_port = htobe16(cmd_port);
+            if (inet_aton(multicast_address.c_str(), &destination_address.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
+                syserr("inet_aton");
+        }
 
         uint64_t curr_data_len = 0;
         string filename;
+        struct SimpleMessage message {htobe64(message_seq), cp::files_list_response};
         for (const fs::path& file : this->files_in_storage) {
             filename = file.filename().string();
             if (is_substring(pattern, filename)) {
@@ -297,17 +308,11 @@ public:
         if (curr_data_len > 0)
             send_message_udp(message, recv_addr, curr_data_len);
 
-        close(sock);
+        if (close(sock) < 0)
+            syserr("close");
         BOOST_LOG_TRIVIAL(trace) << "All files matching given pattern has been sent";
     }
 
-    vector<fs::path>::iterator find_file(const string& filename) {
-        for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
-            if (it->filename() == filename)
-                return it;
-
-        return this->files_in_storage.end();
-    }
 
     /************************************************* DOWNLOAD FILE **************************************************/
 
@@ -370,47 +375,61 @@ public:
     /**************************************************** UPLOAD ******************************************************/
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
             const char *filename, uint64_t file_size) {
-        BOOST_LOG_TRIVIAL(info) << "File upload request, filename = " << filename << ", filesize = " << file_size;
+        BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
         if (is_enough_space(file_size)) {
             BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             // Send info about tcp port
-            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, "", htobe64(tcp_port)};
+            ComplexMessage message {htobe64(message_seq), cp::file_add_acceptance, "", htobe64(tcp_port)};
             send_message_udp(message, destination_address);
-            upload_file_via_tcp(tcp_socket, filename);
+            upload_file_via_tcp(tcp_socket, tcp_port, filename);
         } else {
             BOOST_LOG_TRIVIAL(info) << "Rejecting file upload request";
-            SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
+            SimpleMessage message {htobe64(message_seq), cp::file_add_refusal};
             send_message_udp(message, destination_address);
         }
     }
 
-    void upload_file_via_tcp(int tcp_socket, const char* filename) {
-        BOOST_LOG_TRIVIAL(trace) << "Uploading file via tcp...";
+    void upload_file_via_tcp(int tcp_socket, uint16_t port, const char* filename) {
+        BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%") %port;
 
-        struct sockaddr_in source_address{};
-        memset(&source_address, 0, sizeof(source_address));
-        socklen_t len = sizeof(source_address);
-        int sock = accept(tcp_socket, (struct sockaddr*) &source_address, &len);
+        fd_set set;
+        struct timeval timeval{};
+        FD_ZERO(&set);
+        FD_SET(tcp_socket, &set);
 
-        fs::path file_path(this->shared_folder + filename);
-        fs::ofstream ofs(file_path,std::ofstream::binary);
+        timeval.tv_sec = this->timeout;
+        int rv = select(tcp_socket + 1, &set, nullptr, nullptr, &timeval);
+        if (rv == -1) {
+            BOOST_LOG_TRIVIAL(error) << "select";
+        } else if (rv == 0) {
+            BOOST_LOG_TRIVIAL(info) << format("Timeout occured on port:%1% no message received") %port;
+        } else {
+            struct sockaddr_in source_address{};
+            memset(&source_address, 0, sizeof(source_address));
+            socklen_t len = sizeof(source_address);
+            int sock = accept(tcp_socket, (struct sockaddr *) &source_address, &len);
 
-        char buffer[MAX_BUFFER_SIZE];
-        while ((len = read(sock, buffer, sizeof(buffer))) > 0) {
-            ofs.write(buffer, len);
+            fs::path file_path(this->shared_folder + filename);
+            fs::ofstream ofs(file_path, std::ofstream::binary);
+
+            char buffer[MAX_BUFFER_SIZE];
+            while ((len = read(sock, buffer, sizeof(buffer))) > 0) {
+                ofs.write(buffer, len);
+            }
+            ofs.close();
+
+            if (close(sock) < 0)
+                syserr("close");
+
+            BOOST_LOG_TRIVIAL(trace) << format("Ending uploading file via tcp, port:%1%") %port;
         }
-        ofs.close();
-
-        if (close(sock) < 0)
-            syserr("close");
-
-        BOOST_LOG_TRIVIAL(trace) << "Ending uploading file via tcp";
     }
 
     /**************************************************** REMOVE ******************************************************/
 
+    // TODO What is someone is downloading this file in this moment?
     void handle_remove_request(const string& filename) {
         auto it = find_file(filename);
         string file = this->shared_folder + filename;
@@ -419,6 +438,7 @@ public:
             this->files_in_storage.erase(it);
             this->used_space -= fs::file_size(file);
             fs::remove(file);
+            BOOST_LOG_TRIVIAL(info) << "File successfully deleted, filename = " << filename;
         } else {
             BOOST_LOG_TRIVIAL(info) << "Skipping deleting file, no such file in storage";
         }
@@ -426,30 +446,30 @@ public:
 
     /****************************************************** RUN *******************************************************/
 
-    /**
-     * Returns message's command.
-     * @throw invalid_command excpetion if message's command is incorrect or unknown.
-     * @param message - message which command is to be extracted.
-     * @return string representing message's command.
-     */
-    static string get_message_command(const ComplexMessage& message) {
-        if (is_valid_string(message.command, const_variables::max_command_length)) {
-            if (message.command == cp::discover_request)
-                return cp::discover_request;
-            else if (message.command == cp::files_list_request)
-                return cp::files_list_request;
-            else if (message.command == cp::file_add_request)
-                return cp::file_add_request;
-            else if (message.command == cp::file_get_request)
-                return cp::file_get_request;
-            else if (message.command == cp::file_remove_request)
-                return cp::file_remove_request;
-        }
+//    /**
+//     * Returns message's command.
+//     * @throw invalid_command excpetion if message's command is incorrect or unknown.
+//     * @param message - message which command is to be extracted.
+//     * @return string representing message's command.
+//     */
+//    static string get_message_command(const ComplexMessage& message) {
+//        if (is_valid_string(message.command, const_variables::max_command_length)) {
+//            if (message.command == cp::discover_request)
+//                return cp::discover_request;
+//            else if (message.command == cp::files_list_request)
+//                return cp::files_list_request;
+//            else if (message.command == cp::file_add_request)
+//                return cp::file_add_request;
+//            else if (message.command == cp::file_get_request)
+//                return cp::file_get_request;
+//            else if (message.command == cp::file_remove_request)
+//                return cp::file_remove_request;
+//        }
+//
+//        throw invalid_command();
+//    }
 
-        throw invalid_command();
-    }
-
-    tuple<ComplexMessage, struct sockaddr_in> receive_next_message() {
+    tuple<ComplexMessage, ssize_t, struct sockaddr_in> receive_next_message() {
         ComplexMessage message;
         ssize_t recv_len;
         struct sockaddr_in source_address{};
@@ -459,44 +479,115 @@ public:
         if (recv_len < 0)
             syserr("read");
 
-        return {message, source_address};
+        return {message, recv_len, source_address};
+    }
+
+    /**
+     * Basic message validation:
+     * Assures that message's command is correct and data if required was attached. Doesn't validate data.
+     * 1. Checks whether received command is valid.
+     * 2. Checks whether message length is in acceptable range.
+     * @param message - message to be validated.
+     * @param message_length - length of given message (bytes read from socket).
+     */
+    void message_validation(const ComplexMessage& message, ssize_t message_length) {
+        if (is_valid_string(message.command, const_variables::max_command_length)) {
+            if (message.command == cp::file_add_request) {
+                if (message_length < const_variables::complex_message_no_data_size)
+                    throw invalid_message("Message too small");
+            } else {
+                if (message_length < const_variables::simple_message_no_data_size)
+                    throw invalid_message("Message too small");
+
+                if (message.command == cp::discover_request) {
+                    if (message_length > const_variables::simple_message_no_data_size)
+                        throw invalid_message("Message too big");
+                } else if (message.command == cp::files_list_request) {
+
+                } else if (message.command == cp::file_add_request) {
+                    if (message_length == const_variables::simple_message_no_data_size)
+                        throw invalid_message("Upload request, filename not specified.");
+                } else if (message.command == cp::file_get_request) {
+                    if (message_length == const_variables::simple_message_no_data_size)
+                        throw invalid_message("Fetch request, filename not specified.");
+                } else if (message.command == cp::file_remove_request) {
+                    if (message_length == const_variables::simple_message_no_data_size)
+                        throw invalid_message("Remove request, filename not specified.");
+                } else {
+                    throw invalid_message("Unknown command");
+                }
+            }
+        } else {
+            throw invalid_message("Invalid command");
+        }
+    }
+
+    template<typename... A>
+    void handler(A&&... args) {
+        thread handler {std::forward<A>(args)...};
+        handler.detach();
     }
 
     void run() {
         string source_ip;
         string source_port;
-        string_view message_command;
 
         while (true) {
             BOOST_LOG_TRIVIAL(info) << "Waiting for client...";
-            auto [received_message, source_address] = receive_next_message();
+            auto [message_complex, message_length, source_address] = receive_next_message();
             source_ip = inet_ntoa(source_address.sin_addr);
             source_port = be16toh(source_address.sin_port);
 
             try {
-                message_command = get_message_command(received_message);
-            } catch (const invalid_command& e) {
-                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port << endl;
-                BOOST_LOG_TRIVIAL(info) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                message_validation(message_complex, message_length);
+            } catch (const invalid_message& e) {
+                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what() << endl;
+                BOOST_LOG_TRIVIAL(info) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
                 continue;
             }
 
-            if (message_command == cp::file_add_request) {
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << received_message;
-                handle_upload_request(source_address, be64toh(received_message.message_seq), received_message.data,
-                                      be64toh(received_message.param));
+            /// For each message received main thread creates handler and passes to it full reponsibility for handling request.
+            /// That is handling inccorect data, informing client about this etc.
+            /// The only thing main thread guarantees is that message passed is correct size-wise and command-wise
+            if (message_complex.command == cp::file_add_request) {
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << message_complex;
+                handler(&Server::handle_upload_request, this, std::ref(source_address),
+                        be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param));
+//                std::thread handler {&Server::handle_upload_request, this, std::ref(source_address),
+//                        be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param)};
+//                handler.detach();
+//                handle_upload_request(source_address, be64toh(message_complex.message_seq), message_complex.data,
+//                                      be64toh(message_complex.param));
             } else {
-                auto *message = (SimpleMessage*) &received_message;
-                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message;
+                auto *message_simple = (SimpleMessage*) &message_complex;
+                BOOST_LOG_TRIVIAL(info) << "Message received: " << *message_simple;
 
-                if (message_command == cp::discover_request) {
-                    handle_discover_request(source_address, be64toh(message->message_seq));
-                } else if (message_command == cp::files_list_request) {
-                    handle_files_list_request(source_address, be64toh(message->message_seq), message->data);
-                } else if (message_command == cp::file_get_request) {
-                    handle_file_request(source_address, be64toh(message->message_seq), message->data);
-                } else if (message_command == cp::file_remove_request) {
-                    handle_remove_request(message->data);
+                if (message_simple->command == cp::discover_request) {
+                    handler(&Server::handle_discover_request, this,
+                            std::ref(source_address), be64toh(message_simple->message_seq));
+//                    thread handler {&Server::handle_discover_request, this,
+//                                       std::ref(source_address), be64toh(message_simple->message_seq)};
+//                    handler.detach();
+//                    handle_discover_request(source_address, be64toh(message_simple->message_seq));
+                } else if (message_simple->command == cp::files_list_request) {
+                    handler(&Server::handle_files_list_request, this, std::ref(source_address),
+                            be64toh(message_simple->message_seq), message_simple->data);
+//                    thread handler {&Server::handle_files_list_request, this, std::ref(source_address),
+//                            be64toh(message_simple->message_seq), message_simple->data};
+//                    handler.detach();
+//                    handle_files_list_request(source_address, be64toh(message_simple->message_seq), message_simple->data);
+                } else if (message_simple->command == cp::file_get_request) {
+                    handler(&Server::handle_file_request, this, std::ref(source_address),
+                            be64toh(message_simple->message_seq), message_simple->data);
+//                    thread handler {&Server::handle_file_request, this, std::ref(source_address),
+//                            be64toh(message_simple->message_seq), message_simple->data};
+//                    handler.detach();
+//                    handle_file_request(source_address, be64toh(message_simple->message_seq), message_simple->data);
+                } else if (message_simple->command == cp::file_remove_request) {
+                    handler(&Server::handle_remove_request, this, message_simple->data);
+//                    thread handler {&Server::handle_remove_request, this, message_simple->data};
+//                    handler.detach();
+//                    handle_remove_request(message_simple->data);
                 }
             }
         }
@@ -532,6 +623,7 @@ void init() {
 
   //  logging::core::get()->set_logging_enabled(false);
 }
+
 
 
 int main(int argc, const char *argv[]) {

@@ -20,8 +20,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#include "err.h"
 #include "helper.h"
+#include "err.h"
 
 
 
@@ -178,7 +178,7 @@ class Client {
             if (command[i] != expected_command[i])
                 return false;
         while (i < const_variables::max_command_length)
-            if (command[i] != '\0')
+            if (command[i++] != '\0')
                 return false;
         return true;
     }
@@ -254,7 +254,7 @@ class Client {
 
     /*************************************************** DISCOVER *****************************************************/
 
-    void display_server_discovered_info(const char* server_ip, const char* server_mcast_addr, uint64_t server_space) {
+    static void display_server_discovered_info(const char* server_ip, const char* server_mcast_addr, uint64_t server_space) {
         cout << "Found " << server_ip << " (" << server_mcast_addr << ") with free space " << server_space << endl;
     }
 
@@ -264,11 +264,9 @@ class Client {
      * @return Expected respond message's message_seq
      */
     uint64_t send_discover_message(int udp_socket) {
-        BOOST_LOG_TRIVIAL(trace) << "Starting discover...";
         uint64_t message_seq = generate_message_sequence();
         SimpleMessage message{htobe64(message_seq), cp::discover_request};
         send_message_multicast_udp(udp_socket, message);
-        BOOST_LOG_TRIVIAL(trace) << "Finished discover";
         return message_seq;
     }
 
@@ -297,8 +295,8 @@ class Client {
                     if (is_expected_command(message_received.command, cp::discover_response) && is_valid_message(message_received, expected_message_seq)) {
                         display_server_discovered_info(inet_ntoa(source_address.sin_addr), message_received.data, be64toh(message_received.param));
                     } else {
-                        cerr << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<".";
+                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
                     }
                 }
             }
@@ -306,11 +304,13 @@ class Client {
     }
 
     void discover() {
-        int udp_socket = create_multicast_udp_socket();  // todo close socket
+        BOOST_LOG_TRIVIAL(trace) << "Starting discover...";
+        int udp_socket = create_multicast_udp_socket();
         uint64_t expected_message_seq = send_discover_message(udp_socket);
         receive_discover_response(udp_socket, expected_message_seq);
         if (close(udp_socket) < 0)
             BOOST_LOG_TRIVIAL(error) << "socket closing";
+        BOOST_LOG_TRIVIAL(trace) << "Finished discover";
     }
 
     multiset<ServerData, std::greater<>> silent_discover_receive(int udp_socket, uint64_t expected_message_seq) {
@@ -339,9 +339,9 @@ class Client {
                         servers.insert(ServerData(inet_ntoa(source_address.sin_addr),
                                                   be64toh(message_received.param))); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
                     } else {
-                        cerr << format("[PCKG ERROR]  Skipping invalid package from %1%:%2%.") %source_ip %source_port;
-                        cerr << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<".";
+                        cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
                     }
                 }
             }
@@ -362,31 +362,32 @@ class Client {
 
     /************************************************ GET FILES LIST **************************************************/
 
-    void display_files_list(string_view data, uint32_t list_length, const char* source_ip) {
+    void display_files_list(char data[], uint32_t list_length, const char* server_ip) {
 //        int i = 0;
 //        while (i < list_length && data[i] != '\0') {
 //            for (; data[i] != '\n'; ++i)
 //                cout << data[i];
-//            cout << " (" << (source_ip) << ")" << ", i = " << i << endl;
+//            cout << " (" << (server_ip) << ")" << ", i = " << i << endl;
 //            ++i;
 //        }
 
-        string filename;
-        int next_filename_start = 0, next_filename_end, len;
-        while (next_filename_start < list_length) {
-            next_filename_end = data.find('\n', next_filename_start);
-            len = next_filename_end - next_filename_start;
-            filename = data.substr(next_filename_start, len);
-            cout << format("%1% (%2%)") %filename %source_ip << endl;
-            next_filename_start = next_filename_end + 1;
-        }
+//        string filename;
+//        int next_filename_start = 0, next_filename_end, len;
+//        while (next_filename_start < list_length) {
+//            next_filename_end = data.find('\n', next_filename_start);
+//            len = next_filename_end - next_filename_start;
+//            filename = data.substr(next_filename_start, len);
+//            cout << format("%1% (%2%)") %filename %server_ip << endl;
+//            next_filename_start = next_filename_end + 1;
+//        }
 
 //        data[list_length - 1] = '\0';
-//        char *str = strtok(data, "\n");
-//        while (str != nullptr) {
-//            cout << str << " (" << source_ip << ")" << endl;
-//            str = strtok(nullptr, "\n");
-//        }
+        char *filename = strtok(data, "\n");
+        while (filename != nullptr) {
+            cout << filename << " (" << server_ip << ")" << endl;
+            this->last_search_results[filename] = server_ip;
+            filename = strtok(nullptr, "\n");
+        }
     }
 
     // Memorizes only last occurrence of given filename
@@ -442,13 +443,13 @@ class Client {
                 if (recv_len > 0) { /// TODO
                     source_ip = inet_ntoa(source_address.sin_addr);
                     source_port = be16toh(source_address.sin_port);
-                    if (is_correct_files_list(message.data, recv_len - const_variables::simple_message_no_data_size)) {
+                    if (is_valid_data(message.data, recv_len - const_variables::simple_message_no_data_size)) {
                         display_files_list(message.data, recv_len - const_variables::simple_message_no_data_size, source_ip.c_str());
-                        update_search_result(message.data, recv_len - const_variables::simple_message_no_data_size, source_ip.c_str());
+                       //update_search_result(message.data, recv_len - const_variables::simple_message_no_data_size, source_ip.c_str());
                     } else {
-                        cerr << format("[PCKG ERROR]  Skipping invalid package from %1%:%2%.") %source_ip %source_port;
-                        cerr << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR]  Skipping invalid package from " << source_ip << ":" << source_port <<".";
+                        cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
                     }
                 }
             }
@@ -668,7 +669,7 @@ class Client {
                 if (can_upload_file(server_response)) {
                     BOOST_LOG_TRIVIAL(trace) << "Creating thread";
                     // TODO: variable: "running", thread checks wheter it's true, if not then it should terminate
-                    std::thread thread{&Client::upload_file_via_tcp, this, server.ip_addr,
+                    std::thread thread {&Client::upload_file_via_tcp, this, server.ip_addr,
                                        htobe64(server_response.param), filename.c_str()};
                     thread.detach();
                     BOOST_LOG_TRIVIAL(trace) << "Thread detached";
