@@ -168,4 +168,16 @@ public:
     }
 };
 
+class invalid_user_input : public std::exception {
+    const std::string message;
+public:
+    invalid_user_input(std::string message = "Invalid message")
+    : message(std::move(message))
+    {}
+
+    virtual const char* what() const throw() {
+        return this->message.c_str();
+    }
+};
+
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

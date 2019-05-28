@@ -199,7 +199,7 @@ class Client {
 //        return true;
 //    }
 
-    void message_validation(const ComplexMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
+    static void message_validation(const ComplexMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
         if (message_size < const_variables::complex_message_no_data_size)
             throw invalid_message("message too small");
         if (!is_expected_command(message.command, expected_command))
@@ -210,7 +210,7 @@ class Client {
             throw invalid_message("invalid message data");
     }
 
-    void message_validation(const SimpleMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
+    static void message_validation(const SimpleMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
         if (message_size < const_variables::simple_message_no_data_size)
             throw invalid_message("message too small");
         if (!is_expected_command(message.command, expected_command))
@@ -320,7 +320,6 @@ class Client {
                     } catch (const invalid_message& e) {
                         cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
                         BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
-                        continue;
                     }
                 }
             }
@@ -359,13 +358,14 @@ class Client {
                 if (recv_len > 0) {
                     source_ip = inet_ntoa(source_address.sin_addr);
                     source_port = be16toh(source_address.sin_port);
-                    if (is_expected_command(message_received.command, cp::discover_response) && is_valid_message(message_received, expected_message_seq)) {
+
+                    try {
+                        message_validation(message_received, expected_message_seq, cp::discover_response, recv_len);
                         servers.insert(ServerData(inet_ntoa(source_address.sin_addr),
                                                   be64toh(message_received.param))); // TODO jakaś fuinkcja parsująca i rzucająca wyjątek, try catch i handle it
-                    } else {
+                    } catch (const invalid_message& e) {
                         cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
-                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
+                        BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
                     }
                 }
             }
@@ -499,25 +499,28 @@ class Client {
     }
 
     // TODO jakiś fałszywy server mógłby się podszyć... trzeba srpawdzić czy otrzymano faktycznie od tego...
-    static in_port_t receive_fetch_file_response(int udp_socket, uint64_t expected_message_sequence) {
+    static in_port_t receive_fetch_file_response(int udp_socket, uint64_t expected_message_seq) {
         struct ComplexMessage message{};
         struct sockaddr_in source_address{};
         socklen_t addr_length = sizeof(struct sockaddr_in);
         ssize_t recv_len;
 
         recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
-        if (recv_len > 0) {
+        if (recv_len > 0) { //While przez timeout sekund...
             string source_ip = inet_ntoa(source_address.sin_addr);
             uint16_t source_port = be16toh(source_address.sin_port);
-            if (is_valid_message(message, expected_message_sequence) && is_expected_command(message.command, cp::file_get_response)) {
-                BOOST_LOG_TRIVIAL(info) << format("Get file response received: port=%1% filename=%2%, source=%3%:%4%")
+
+            try { // TODO validate received filename? it should be 1. the same 2. valid -: the same -> valid ;)
+                message_validation(message, expected_message_seq, cp::file_get_response, recv_len);
+                BOOST_LOG_TRIVIAL(info) << format("fetch file response received: port=%1% filename=%2%, source=%3%:%4%")
                                            %be64toh(message.param) %message.data %source_ip %source_port;
-            } else {
-                cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+            } catch (const invalid_message& e) {
+                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
             }
         }
 
-        return be64toh(message.param);
+        return be64toh(message.param); // TODO też jesli rpzez timeout nie dsotal to...
     }
 
     void fetch_file_via_tcp(const char* server_ip, in_port_t server_port, const string& filename) {
@@ -597,19 +600,22 @@ class Client {
         socklen_t addr_length = sizeof(struct sockaddr_in);
         ssize_t recv_len;
 
+        /// TODO on tu powinien się krecić przez timeout sekund i czekać na poprawnego clienta... Odrzucając niepoprawnych!
         recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
         if (recv_len > 0) {
             string source_ip = inet_ntoa(source_address.sin_addr);
             uint16_t source_port = be16toh(source_address.sin_port);
-            if (is_valid_message(message, expected_message_sequence) && is_expected_command(message.command, cp::file_add_acceptance)) {
-                BOOST_LOG_TRIVIAL(info) << format("Get file response received: port=%1% filename=%2%, source=%3%:%4%")
-                                           %be64toh(message.param) %message.data %source_ip %source_port;
-            } else {
-                cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
+
+            try {
+                message_validation(message, expected_message_sequence, cp::file_add_acceptance, recv_len);
+                return message;
+            } catch (const invalid_message& e) {
+                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
             }
         }
 
-        return message;
+        return message; // TODO jeśli przez timeout nie otrzymał nic to trzeba ? wyjątek? int?
     }
 
     /**
@@ -737,17 +743,41 @@ public:
     {}
 
 
-    static vector<string> read_user_command() {
-        vector<string> tokenized_command;
+
+    static bool is_param_required(const string& command) {
+        std::set<string> s = {"fetch", "upload", "remove"};
+        return s.find(command) != s.end();
+    }
+
+    static bool no_parameter_allowed(const string& command) {
+        std::set<string> s {"exit", "discover"};
+        return s.find(command) != s.end();
+    }
+
+
+    /**
+     *
+     * @return <command, parameter> command and parameter given by user, if parameter is optional and wasn't given then empty string is returned
+     */
+    static tuple<string, string> read_user_command() {
+        vector<string> tokenized_input;
         string input;
         getline(cin, input);
-        boost::split(tokenized_command, input, [](char c) {
+        boost::split(tokenized_input, input, [](char c) {
             return iswspace(c);
         },
         boost::token_compress_on);
 
-        if (tokenized_command.size() > 2)
+        if (tokenized_input.size() > 2 || (tokenized_input.size() == 2 && no_parameter_allowed(tokenized_input[0])))
+            throw invalid_user_input("too many parameters");
+        else if (tokenized_input.size() == 0)
+            throw invalid_user_input("no command inserted");
+        else if (tokenized_input.size() == 1 && is_param_required(tokenized_input[0]))
+            throw invalid_user_input("command required parameter");
 
+        if (tokenized_input.size() == 2)
+            return {tokenized_input[0], tokenized_input[1]};
+        return {tokenized_input[0], ""};
     }
 
 
@@ -755,39 +785,35 @@ public:
     void run() {
         string comm, param;
         bool exit = false;
-        vector<string>
 
         while (!exit) {
             display_log_separator();
             cout << "Enter command: " << endl;
 
-            cin >> comm;
-            boost::algorithm::to_lower(comm);
-            if (comm == "exit") {
-                cout << comm;
-                exit = true;
-            } else if (comm == "discover") {
-                discover();
-            } else {
-                if (comm == "search") {
-                    cin >> param;
-                    boost::algorithm::to_lower(param);
-                    search(param);
-                } else if (comm == "fetch") {
-                    cin >> param;
-                    boost::algorithm::to_lower(param);
-                    fetch(param);
-                } else if (comm == "upload") {
-                    cin >> param;
-                    boost::algorithm::to_lower(param);
-                    upload(param);
-                } else if (comm == "remove") {
-                    cin >> param;
-                    boost::algorithm::to_lower(param);
-                    remove(param);
+            try {
+                auto[comm, param] = read_user_command();
+                boost::algorithm::to_lower(comm);
+                boost::algorithm::to_lower(param);
+
+                if (comm == "exit") {
+                    exit = true;
+                } else if (comm == "discover") {
+                    discover();
                 } else {
-                    cout << "Unknown command\n";
+                    if (comm == "search") {
+                        search(param);
+                    } else if (comm == "fetch") {
+                        fetch(param);
+                    } else if (comm == "upload") {
+                        upload(param);
+                    } else if (comm == "remove") {
+                        remove(param);
+                    } else {
+                        throw invalid_user_input("unknown command");
+                    }
                 }
+            } catch (const invalid_user_input& e) {
+                BOOST_LOG_TRIVIAL(info) << "invalid user command";
             }
         }
     }

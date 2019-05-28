@@ -5,7 +5,7 @@
 #include <tuple>
 #include <thread>
 #include <regex>
-#include <atomic>
+#include <mutex>
 
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
@@ -124,7 +124,23 @@ class Server {
     const string shared_folder;
     const uint16_t timeout;
 
-    vector<fs::path> files_in_storage;
+    std::mutex files_in_storage_mutex;
+    std::set<fs::path> files_in_storage;
+
+    bool add_file_to_storage(const fs::path& file_path) {
+        std::lock_guard<std::mutex> lock(files_in_storage_mutex);
+        return files_in_storage.insert(file_path).second;
+    }
+
+    int erase_file_from_storage(const fs::path& file_path) {
+        std::lock_guard<std::mutex> lock(files_in_storage_mutex);
+        return files_in_storage.erase(file_path);
+    }
+
+    bool is_in_storage(const fs::path& file_path) {
+        std::lock_guard<std::mutex> lock(files_in_storage_mutex);
+        return files_in_storage.find(file_path) != files_in_storage.end();
+    }
 
     /*** Receiving ***/
     int recv_socket;
@@ -137,7 +153,7 @@ class Server {
             throw std::invalid_argument("Shared folder is not a directory");
         for (const auto& path: fs::directory_iterator(this->shared_folder)) {
           if (fs::is_regular_file(path)) {
-                files_in_storage.emplace_back(path.path());
+                files_in_storage.insert(path.path());
                 this->used_space += fs::file_size(path.path());
            }
         }
@@ -253,13 +269,13 @@ class Server {
         used_space -= size;
     }
 
-    vector<fs::path>::iterator find_file(const string& filename) {
-        for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
-            if (it->filename() == filename)
-                return it;
-
-        return this->files_in_storage.end();
-    }
+//    vector<fs::path>::iterator find_file(const string& filename) {
+//        for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
+//            if (it->filename() == filename)
+//                return it;
+//
+//        return this->files_in_storage.end();
+//    }
 
 public:
     Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
@@ -291,8 +307,7 @@ public:
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
         BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
                                         %inet_ntoa(destination_address.sin_addr) %be16toh(destination_address.sin_port);
-        send_message_udp(message, destination_address,
-                const_variables::complex_message_no_data_size + this->multicast_address.length());
+        send_message_udp(message, destination_address, this->multicast_address.length());
         BOOST_LOG_TRIVIAL(info) << "Message sent: " << message;
     }
 
@@ -308,12 +323,14 @@ public:
     void handle_files_list_request(const struct sockaddr_in& destination_address, uint64_t message_seq, const char *pattern) {
         BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
         int sock;
-        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-
         uint64_t curr_data_len = 0;
         string filename;
         struct SimpleMessage message {htobe64(message_seq), cp::files_list_response};
+
+        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+            syserr("socket");
+
+        std::lock_guard<std::mutex> lock(files_in_storage_mutex);
         for (const fs::path& file : this->files_in_storage) {
             filename = file.filename().string();
             if (is_substring(pattern, filename)) {
@@ -331,7 +348,7 @@ public:
 
         if (close(sock) < 0)
             syserr("close");
-        BOOST_LOG_TRIVIAL(trace) << format("Handled files list request, pattern = ") %pattern;
+        BOOST_LOG_TRIVIAL(trace) << format("Handled files list request, pattern = %1%") %pattern;
     }
 
 
@@ -344,7 +361,7 @@ public:
      */
     void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const string& filename) {
         BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename = " << filename;
-        if (find_file(filename) != this->files_in_storage.end()) {
+        if (is_in_storage(filename)) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename.c_str(), htobe64(tcp_port)};
@@ -371,7 +388,7 @@ public:
         timeval.tv_sec = this->timeout;
         int rv = select(tcp_socket + 1, &set, nullptr, nullptr, &timeval); // Wait for client up to timeout sec.
         if (rv == -1) {
-            BOOST_LOG_TRIVIAL(error) << format("select, port = ") %tcp_port;
+            BOOST_LOG_TRIVIAL(error) << format("select, port = %1%") %tcp_port;
         } else if (rv == 0) {
             BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %tcp_port;
         } else { // Client is waiting
@@ -417,12 +434,17 @@ public:
         BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
         bool can_upload;
 
-        if (!(can_upload = is_valid_filename(filename))) {
-            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, incorrect filename,"
-                                              "received_filename = %1%") %filename;
-        } else if (!(can_upload = check_and_reserve_space(file_size))) {
+//        if (!(can_upload = is_valid_filename(filename))) {
+//            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, incorrect filename,"
+//                                              "received_filename = %1%") %filename;
+//        } else
+        if (!(can_upload = check_and_reserve_space(file_size))) {
             BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, not enough space,"
                                               "requested_space = %1%") %file_size;
+        }
+        if (!(can_upload = this->files_in_storage.insert(filename).second)) {
+            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, file already in storage,"
+                                              "filename = %1%") % filename;
         }
 
         if (can_upload) { // TODO some failure, free space... + free filename here somewhere reserve this filename?
@@ -468,6 +490,8 @@ public:
             }
             ofs.close();
 
+            // TODO if failure ~ remove filename, free space
+
             if (close(sock) < 0)
                 syserr("close");
 
@@ -480,13 +504,11 @@ public:
     // TODO What is someone is downloading this file in this moment?
     // TODO validate filename or just skip it? ~ info ? incorrect filanem or sth? Or just don;t do anything if file not in filelist
     void handle_remove_request(const string& filename) {
-        auto it = find_file(filename);
-        string file = this->shared_folder + filename;
-        if (it != this->files_in_storage.end()) {
+        fs::path file_path = this->shared_folder + filename;
+        if (this->files_in_storage.erase(file_path.string()) > 0) {
             BOOST_LOG_TRIVIAL(info) << "Deleting file, filename = " << filename;
-            this->files_in_storage.erase(it);
-            this->used_space -= fs::file_size(file);
-            fs::remove(file);
+            free_space(fs::file_size(file_path));
+            fs::remove(file_path);
             BOOST_LOG_TRIVIAL(info) << "File successfully deleted, filename = " << filename;
         } else {
             BOOST_LOG_TRIVIAL(info) << "Skipping deleting file, no such file in storage";
@@ -495,10 +517,10 @@ public:
 
     /************************************************** VALIDATION ****************************************************/
 
-    static bool is_valid_filename(const string& filename) { // TODO max filename length?
-        std::regex filename_regex("[^-_.A-Za-z0-9]");
-        return std::regex_match(filename, filename_regex);
-    }
+//    static bool is_valid_filename(const string& filename) { // TODO max filename length?
+//        std::regex filename_regex("^(\\w|\\d|\\.)+$"); // TODO :<
+//        return std::regex_match(filename, filename_regex);
+//    }
 
     /**
      * Basic message validation:
@@ -590,11 +612,6 @@ public:
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << message_complex;
                 handler(&Server::handle_upload_request, this, std::ref(source_address),
                         be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param));
-//                std::thread handler {&Server::handle_upload_request, this, std::ref(source_address),
-//                        be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param)};
-//                handler.detach();
-//                handle_upload_request(source_address, be64toh(message_complex.message_seq), message_complex.data,
-//                                      be64toh(message_complex.param));
             } else {
                 auto *message_simple = (SimpleMessage*) &message_complex;
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << *message_simple;
@@ -602,29 +619,14 @@ public:
                 if (message_simple->command == cp::discover_request) {
                     handler(&Server::handle_discover_request, this,
                             std::ref(source_address), be64toh(message_simple->message_seq));
-//                    thread handler {&Server::handle_discover_request, this,
-//                                       std::ref(source_address), be64toh(message_simple->message_seq)};
-//                    handler.detach();
-//                    handle_discover_request(source_address, be64toh(message_simple->message_seq));
                 } else if (message_simple->command == cp::files_list_request) {
                     handler(&Server::handle_files_list_request, this, std::ref(source_address),
                             be64toh(message_simple->message_seq), message_simple->data);
-//                    thread handler {&Server::handle_files_list_request, this, std::ref(source_address),
-//                            be64toh(message_simple->message_seq), message_simple->data};
-//                    handler.detach();
-//                    handle_files_list_request(source_address, be64toh(message_simple->message_seq), message_simple->data);
                 } else if (message_simple->command == cp::file_get_request) {
                     handler(&Server::handle_file_request, this, std::ref(source_address),
                             be64toh(message_simple->message_seq), message_simple->data);
-//                    thread handler {&Server::handle_file_request, this, std::ref(source_address),
-//                            be64toh(message_simple->message_seq), message_simple->data};
-//                    handler.detach();
-//                    handle_file_request(source_address, be64toh(message_simple->message_seq), message_simple->data);
                 } else if (message_simple->command == cp::file_remove_request) {
                     handler(&Server::handle_remove_request, this, message_simple->data);
-//                    thread handler {&Server::handle_remove_request, this, message_simple->data};
-//                    handler.detach();
-//                    handle_remove_request(message_simple->data);
                 }
             }
         }
