@@ -125,25 +125,26 @@ class Server {
     const uint16_t timeout;
 
     std::mutex files_in_storage_mutex;
-    std::set<fs::path> files_in_storage;
+    std::set<string> files_in_storage;
 
-    bool add_file_to_storage(const fs::path& file_path) {
+    bool add_file_to_storage(const string& filename) {
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
-        return files_in_storage.insert(file_path).second;
+        return files_in_storage.insert(filename).second;
     }
 
-    int erase_file_from_storage(const fs::path& file_path) {
+    int remove_file_from_storage(const string &filename) {
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
-        return files_in_storage.erase(file_path);
+        return files_in_storage.erase(filename);
     }
 
-    bool is_in_storage(const fs::path& file_path) {
+    bool is_in_storage(const string& filename) {
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
-        return files_in_storage.find(file_path) != files_in_storage.end();
+        return files_in_storage.find(filename) != files_in_storage.end();
     }
 
     /*** Receiving ***/
     int recv_socket;
+    int udp_send_socket;
 
     // TODO: Ask whether directories should be listed
     void generate_files_in_storage() {
@@ -151,12 +152,35 @@ class Server {
             throw std::invalid_argument("Shared folder doesn't exists");
         if (!fs::is_directory(this->shared_folder))
             throw std::invalid_argument("Shared folder is not a directory");
-        for (const auto& path: fs::directory_iterator(this->shared_folder)) {
-          if (fs::is_regular_file(path)) {
-                files_in_storage.insert(path.path());
-                this->used_space += fs::file_size(path.path());
+        for (const auto& entry: fs::directory_iterator(this->shared_folder)) {
+          if (fs::is_regular_file(entry)) {
+                files_in_storage.insert(entry.path().filename().string());
+                this->used_space += fs::file_size(entry.path());
            }
         }
+    }
+
+    void init_sockets() {
+        if ((recv_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+            syserr("socket");
+        if ((udp_send_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+            syserr("socket");
+
+        join_multicast_group();
+
+        int reuse = 1; // TODO wywalić domyślnie?
+        if (setsockopt(recv_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+            syserr("setsockopt(SO_REUSEADDR) failed");
+        reuse = 1;
+        if (setsockopt(udp_send_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+            syserr("setsockopt(SO_REUSEADDR) failed");
+
+        struct sockaddr_in local_address{};
+        local_address.sin_family = AF_INET;
+        local_address.sin_addr.s_addr = htonl(INADDR_ANY);
+        local_address.sin_port = htons(cmd_port);
+        if (bind(recv_socket, (struct sockaddr*) &local_address, sizeof(local_address)) < 0)
+            syserr("bind");
     }
 
     void init_recv_socket() {
@@ -215,27 +239,17 @@ class Server {
         return {tcp_socket, tcp_port};
     }
 
-    static void send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
+    void send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
-        int sock;
-        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-        if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
+        if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
             syserr("sendto");
-        if (close(sock) < 0)
-            syserr("sock");
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
-    static void send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
+    void send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::complex_message_no_data_size + data_length;
-        int sock;
-        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-        if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
+        if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
             syserr("sendto");
-        if (close(sock) < 0)
-            syserr("sock");
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
@@ -244,9 +258,6 @@ class Server {
         return tmp > this->max_available_space ? 0 : this->max_available_space - tmp;
     }
 
-//    bool is_enough_space(uint64_t file_size) {
-//        return file_size <= this->get_available_space();
-//    }
 
     /**
      * Attempts to reserve given amount of space
@@ -269,14 +280,6 @@ class Server {
         used_space -= size;
     }
 
-//    vector<fs::path>::iterator find_file(const string& filename) {
-//        for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
-//            if (it->filename() == filename)
-//                return it;
-//
-//        return this->files_in_storage.end();
-//    }
-
 public:
     Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, string shared_folder_path, uint16_t timeout)
         : multicast_address(std::move(mcast_addr)),
@@ -294,7 +297,7 @@ public:
     void init() {
         BOOST_LOG_TRIVIAL(trace) << "Starting server initialization...";
         generate_files_in_storage();
-        init_recv_socket();
+        init_sockets();
         BOOST_LOG_TRIVIAL(trace) << "Server initialization ended";
     }
 
@@ -302,7 +305,7 @@ public:
     /*************************************************** DISCOVER *****************************************************/
 
     // TODO multicast ma być w jakim formacie przesłany??
-    void handle_discover_request(const struct sockaddr_in& destination_address, uint64_t message_seq) {
+    void handle_discover_request(struct sockaddr_in destination_address, uint64_t message_seq) {
         struct ComplexMessage message {htobe64(message_seq), cp::discover_response,
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
         BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
@@ -320,22 +323,16 @@ public:
         *start_index += filename.length();
     }
 
-    void handle_files_list_request(const struct sockaddr_in& destination_address, uint64_t message_seq, const char *pattern) {
+    void handle_files_list_request(struct sockaddr_in destination_address, uint64_t message_seq, string pattern) {
         BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
-        int sock;
         uint64_t curr_data_len = 0;
-        string filename;
         struct SimpleMessage message {htobe64(message_seq), cp::files_list_response};
 
-        if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
-        for (const fs::path& file : this->files_in_storage) {
-            filename = file.filename().string();
+        for (const string& filename : this->files_in_storage) {
             if (is_substring(pattern, filename)) {
                 if (const_variables::max_simple_data_size > curr_data_len + filename.length()) {
-                    fill_message_with_filename(message, &curr_data_len, file.filename().generic_string());
+                    fill_message_with_filename(message, &curr_data_len, filename);
                 } else {
                     send_message_udp(message, destination_address, curr_data_len);
                     curr_data_len = 0;
@@ -345,9 +342,6 @@ public:
         }
         if (curr_data_len > 0)
             send_message_udp(message, destination_address, curr_data_len);
-
-        if (close(sock) < 0)
-            syserr("close");
         BOOST_LOG_TRIVIAL(trace) << format("Handled files list request, pattern = %1%") %pattern;
     }
 
@@ -359,7 +353,7 @@ public:
      * 2. Send chosen port to the client
      * 3. Wait on this port for TCP connection with the client
      */
-    void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const string& filename) {
+    void handle_file_request(struct sockaddr_in destination_address, uint64_t message_seq, string filename) {
         BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename = " << filename;
         if (is_in_storage(filename)) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
@@ -429,8 +423,8 @@ public:
      *
      * */
 
-    void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
-            const string& filename, uint64_t file_size) {
+    void handle_upload_request(struct sockaddr_in destination_address, uint64_t message_seq,
+            string filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
         bool can_upload;
 
@@ -440,22 +434,22 @@ public:
 //        } else
         if (!(can_upload = check_and_reserve_space(file_size))) {
             BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, not enough space,"
-                                              "requested_space = %1%") %file_size;
-        }
-        if (!(can_upload = this->files_in_storage.insert(filename).second)) {
-            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, file already in storage,"
-                                              "filename = %1%") % filename;
-        }
-
-        if (can_upload) { // TODO some failure, free space... + free filename here somewhere reserve this filename?
+                                              " requested_space = %1%") %file_size;
+        } else if (!(can_upload = add_file_to_storage(filename))) {
+                BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, file already in storage,"
+                                                  " filename = %1%") % filename;
+        } else { // TODO some failure, free space... + free filename here somewhere reserve this filename?
             BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
             auto[tcp_socket, tcp_port] = create_tcp_socket();
 
             // Send info about tcp port
-            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, filename.c_str(), htobe64(tcp_port)};
+            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, filename.c_str(),
+                                   htobe64(tcp_port)};
             send_message_udp(message, destination_address);
             upload_file_via_tcp(tcp_socket, tcp_port, filename);
-        } else {
+        }
+
+        if (!can_upload) {
             SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
             send_message_udp(message, destination_address);
         }
@@ -503,10 +497,10 @@ public:
 
     // TODO What is someone is downloading this file in this moment?
     // TODO validate filename or just skip it? ~ info ? incorrect filanem or sth? Or just don;t do anything if file not in filelist
-    void handle_remove_request(const string& filename) {
-        fs::path file_path = this->shared_folder + filename;
-        if (this->files_in_storage.erase(file_path.string()) > 0) {
+    void handle_remove_request(string filename) {
+        if (this->remove_file_from_storage(filename) > 0) {
             BOOST_LOG_TRIVIAL(info) << "Deleting file, filename = " << filename;
+            fs::path file_path = this->shared_folder + filename;
             free_space(fs::file_size(file_path));
             fs::remove(file_path);
             BOOST_LOG_TRIVIAL(info) << "File successfully deleted, filename = " << filename;
@@ -581,12 +575,6 @@ public:
         return {message, recv_len, source_address};
     }
 
-    template<typename... A>
-    void handler(A&&... args) {
-        thread handler {std::forward<A>(args)...};
-        handler.detach();
-    }
-
     void run() {
         string source_ip;
         string source_port;
@@ -613,7 +601,7 @@ public:
                 handler(&Server::handle_upload_request, this, std::ref(source_address),
                         be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param));
             } else {
-                auto *message_simple = (SimpleMessage*) &message_complex;
+                auto message_simple = (SimpleMessage*) &message_complex;
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << *message_simple;
 
                 if (message_simple->command == cp::discover_request) {

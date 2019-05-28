@@ -1,4 +1,5 @@
 #include <utility>
+#include <thread>
 
 #ifndef DISTRIBUTED_FILES_STORAGE_HELPER_H
 #define DISTRIBUTED_FILES_STORAGE_HELPER_H
@@ -120,11 +121,17 @@ bool is_valid_string(const char *str, uint64_t max_len) {
 }
 
 bool is_valid_data(const char *data, uint64_t length) {
-    uint64_t i = 0;
-    while (i < length)
-        if (data[i++] == '\0')
+    for (uint64_t i = 1; i < length; i++) {
+        if (data[i] != '\0' && data[i - 1] == '\0')
             return false;
+    }
     return true;
+}
+
+template<typename... A>
+void handler(A&&... args) {
+    std::thread handler {std::forward<A>(args)...};
+    handler.detach();
 }
 
 
@@ -132,7 +139,7 @@ bool is_valid_data(const char *data, uint64_t length) {
  * @return True if given pattern is a substring of given string,
  *         false otherwise
  */
-bool is_substring(char const* pattern, const std::string& str) {
+bool is_substring(const std::string& pattern, const std::string& str) {
     return str.find(pattern) != std::string::npos;
 }
 

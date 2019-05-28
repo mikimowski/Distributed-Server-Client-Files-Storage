@@ -349,7 +349,7 @@ class Client {
                 recv_len = recvfrom(sock, &msg_recv, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&src_addr, &addrlen);
                 if (recv_len == sizeof(msg_recv)) {
                     const char* source_ip = inet_ntoa(src_addr.sin_addr);
-                  //  display_files_list(msg_recv.data, source_ip);
+                  //  display_and_update_files_list(msg_recv.data, source_ip);
                     update_search_result(msg_recv.data, source_ip);
                 }
             }

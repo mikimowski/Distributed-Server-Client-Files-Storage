@@ -167,6 +167,22 @@ class Client {
         return unicast_socket;
     }
 
+    static int create_and_connect_tcp_socket(const char* destination_ip, uint16_t destination_port) {
+        int tcp_socket;
+        struct sockaddr_in destination_address{};
+        memset(&destination_address, 0, sizeof(destination_address));
+        destination_address.sin_family = AF_INET;
+        destination_address.sin_port = htobe16(destination_port);
+        if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
+            syserr("inet_aton");
+        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+            syserr("socket");
+        if (connect(tcp_socket, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
+            syserr("connect");
+
+        return tcp_socket;
+    }
+
     uint64_t generate_message_sequence() {
         return uniform_distribution(generator);
     }
@@ -217,7 +233,7 @@ class Client {
             throw invalid_message("invalid command");
         if (be64toh(message.message_seq) != expected_message_seq)
             throw invalid_message("invalid message seq");
-        if (!is_valid_data(message.data, message_size - const_variables::complex_message_no_data_size)) //  TODO is it right? check!
+        if (!is_valid_data(message.data, message_size - const_variables::simple_message_no_data_size)) //  TODO is it right? check!
             throw invalid_message("invalid message data");
     }
 
@@ -386,7 +402,7 @@ class Client {
 
     /************************************************ GET FILES LIST **************************************************/
 
-    void display_files_list(char data[], uint32_t list_length, const char* server_ip) {
+    void display_and_update_files_list(char *data, uint32_t list_length, const char *server_ip) {
 //        int i = 0;
 //        while (i < list_length && data[i] != '\0') {
 //            for (; data[i] != '\n'; ++i)
@@ -450,37 +466,26 @@ class Client {
         struct sockaddr_in source_address{};
         socklen_t addr_length = sizeof(struct sockaddr_in);
         ssize_t recv_len;
-        bool timeout_occ = false;
 
         set_socket_timeout(udp_socket);
-
-        in_port_t source_port;
-        string source_ip;
-        auto wait_start_time = std::chrono::high_resolution_clock::now();
-        while (!timeout_occ) {
-            auto curr_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> elapsed_time = curr_time - wait_start_time;
-            if (elapsed_time.count() / 1000 >= timeout) {
-                timeout_occ = true;
-            } else {
-                recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
-                if (recv_len > 0) { /// TODO
-                    source_ip = inet_ntoa(source_address.sin_addr);
-                    source_port = be16toh(source_address.sin_port);
-                    if (is_valid_data(message.data, recv_len - const_variables::simple_message_no_data_size)) {
-                        display_files_list(message.data, recv_len - const_variables::simple_message_no_data_size, source_ip.c_str());
-                       //update_search_result(message.data, recv_len - const_variables::simple_message_no_data_size, source_ip.c_str());
-                    } else {
-                        cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
-                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
-                    }
+        auto start_time = std::chrono::high_resolution_clock::now();
+        while (!its_timeout(start_time)) {
+            recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
+            if (recv_len > 0) { /// TODO
+                auto [source_ip, source_port] = unpack_sockaddr(source_address);
+// TODO validation...
+                if (is_valid_data(message.data, recv_len - const_variables::simple_message_no_data_size)) {
+                    display_and_update_files_list(message.data, recv_len - const_variables::simple_message_no_data_size,
+                                                  source_ip.c_str());
+                } else {
+                    cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
+                    BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
                 }
             }
         }
     }
 
-    void search(const string& pattern) {
+    void search(string pattern) {
         BOOST_LOG_TRIVIAL(info) << format("Starting search, pattern=%1%...") % pattern;
         int udp_socket = create_multicast_udp_socket();  // todo close socket
         send_get_files_list_message(udp_socket, pattern);
@@ -548,7 +553,7 @@ class Client {
 
 
     // TODO nie działa at all
-    void fetch(const string& filename) {
+    void fetch(string filename) {
         BOOST_LOG_TRIVIAL(trace) << format("Starting fetch, filename=%1%...") % filename;
         if (this->last_search_results.find(filename) == this->last_search_results.end()) {
             cout << "Unknown file" << endl;
@@ -573,8 +578,9 @@ class Client {
 
     /*************************************************** ADD FILE *****************************************************/
 
-    static bool can_upload_file(ComplexMessage server_response) {
-        return server_response.command == cp::file_add_acceptance;
+    bool can_upload_file(int udp_socket, const char* server_ip, const string& filename, ComplexMessage& server_response) {
+        uint64_t message_sequence = send_upload_file_request(udp_socket, server_ip, filename);
+        return receive_upload_file_response(udp_socket, message_sequence, server_response);
     }
 
     /// return sent message's message_sequence
@@ -585,75 +591,59 @@ class Client {
         return message_sequence;
     }
 
-    static ComplexMessage send_udp_message(int udp_socket, ComplexMessage message) {
 
+    template<typename T>
+    bool its_timeout(const std::chrono::time_point<T>& start_time) {
+        auto curr_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed_time = curr_time - start_time;
+        return elapsed_time.count() / 1000 >= timeout;
     }
 
-    static ComplexMessage receive_udp_message(int upd_socket, struct sockaddr_in source_address) {
-
+    // TODO throw expection if failed... ?? no way of failure...
+    tuple<string, in_port_t> unpack_sockaddr(const struct sockaddr_in& address) {
+        return {inet_ntoa(address.sin_addr), be16toh(address.sin_port)};
     }
 
     // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
-    static ComplexMessage receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence) {
-        struct ComplexMessage message{};
-        struct sockaddr_in source_address{};
-        socklen_t addr_length = sizeof(struct sockaddr_in);
+    bool receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence, ComplexMessage& message) {
+        struct sockaddr_in source_address {};
+        socklen_t addr_len;
         ssize_t recv_len;
 
-        /// TODO on tu powinien się krecić przez timeout sekund i czekać na poprawnego clienta... Odrzucając niepoprawnych!
-        recv_len = recvfrom(udp_socket, &message, sizeof(message), 0, (struct sockaddr*)&source_address, &addr_length);
-        if (recv_len > 0) {
-            string source_ip = inet_ntoa(source_address.sin_addr);
-            uint16_t source_port = be16toh(source_address.sin_port);
-
-            try {
-                message_validation(message, expected_message_sequence, cp::file_add_acceptance, recv_len);
-                return message;
-            } catch (const invalid_message& e) {
-                cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") %source_ip %source_port;
-                BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
+        set_socket_timeout(udp_socket);
+        auto start_time = std::chrono::high_resolution_clock::now();
+        while (!its_timeout(start_time)) {
+            addr_len = sizeof(struct sockaddr_in);
+            recv_len = recvfrom(udp_socket, &message, sizeof(struct ComplexMessage), 0, (struct sockaddr *) &source_address, &addr_len);
+            if (recv_len >= 0) {
+                try {
+                    if (is_expected_command(message.command, cp::file_add_acceptance)) {
+                        message_validation(message, expected_message_sequence, cp::file_add_acceptance, recv_len);
+                        return true; // connect_me
+                    } else {
+                        auto message_simple = (SimpleMessage *) &message;
+                        message_validation(*message_simple, expected_message_sequence, cp::file_add_refusal, recv_len);
+                        return false; // no_way
+                    }
+                } catch (const invalid_message &e) {
+                    auto [source_ip, source_port] = unpack_sockaddr(source_address);
+                    cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") % source_ip % source_port;
+                    BOOST_LOG_TRIVIAL(error)
+                        << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") % source_ip %
+                           source_port % e.what();
+                }
             }
         }
 
-        return message; // TODO jeśli przez timeout nie otrzymał nic to trzeba ? wyjątek? int?
+/// FALSE -> no valid respond
+        return false; // TODO jeśli przez timeout nie otrzymał nic to trzeba ? wyjątek? int?
     }
 
-    /**
-     *
-     * @param server_ip
-     * @param filename
-     * @return If acceptect tcp_port on which server expects connection in order to upload file
-     *         -1 otherwise
-     */
-    ComplexMessage ask_server_to_upload_file(const char* server_ip, const char* filename) {
-        int udp_socket = create_multicast_udp_socket();
-        uint64_t message_sequence = send_upload_file_request(udp_socket, server_ip, filename);
-        return receive_upload_file_response(udp_socket, message_sequence);
-    }
-
-    static int create_and_connect_tcp_socket(const char* destination_ip, uint16_t destination_port) {
-        int tcp_socket;
-        struct sockaddr_in destination_address{};
-        memset(&destination_address, 0, sizeof(destination_address));
-        destination_address.sin_family = AF_INET;
-        destination_address.sin_port = htobe16(destination_port);
-        if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
-            syserr("inet_aton");
-        if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-            syserr("socket");
-        if (connect(tcp_socket, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
-            syserr("connect");
-
-        return tcp_socket;
-    }
-
-    void upload_file_via_tcp(const char* server_ip, in_port_t server_port, const char* filename) {
+    void upload_file_via_tcp(const char* server_ip, in_port_t server_port, const fs::path& file_path) {
         BOOST_LOG_TRIVIAL(trace) << "Starting uploading file via tcp...";
         int tcp_socket = create_and_connect_tcp_socket(server_ip, server_port);
 
-        fs::path file_path{this->out_folder + filename};
-        std::ifstream file_stream{file_path.c_str(), std::ios::binary};
-
+        std::ifstream file_stream {file_path.c_str(), std::ios::binary};
         if (file_stream.is_open()) {
             char buffer[MAX_BUFFER_SIZE];
             while (file_stream) {
@@ -670,10 +660,10 @@ class Client {
         if (close(tcp_socket) < 0)
             syserr("close");
         BOOST_LOG_TRIVIAL(trace) << "Uploading file via tcp finished";
-        cout << "File " << filename << " uploaded (" << server_ip << ":" << server_port << ")" << endl;
+        cout << format("File %1% uploaded (%2%:%3%)") %file_path.filename() %server_ip %server_port;
     }
 
-    bool at_least_on_server_has_space(multiset<ServerData, std::greater<>>& servers, size_t space_required) {
+    static bool at_least_on_server_has_space(const multiset<ServerData, std::greater<>>& servers, size_t space_required) {
         return !servers.empty() && servers.begin()->available_space >= space_required;
     }
 
@@ -686,35 +676,37 @@ class Client {
      * 5. Inform user whether file was successfully uploaded or not
      * @param file
      */
-    void upload(const string& filename) {
+
+    /*
+     * TODO:
+     * 1. Validate file ~ exists?
+     */
+    void upload(fs::path file_path) { // copy because it's another thread!
         BOOST_LOG_TRIVIAL(trace) << "Starting upload procedure...";
         ComplexMessage server_response{};
 
-        multiset<ServerData, std::greater<>> servers = silent_discover();
-        if (at_least_on_server_has_space(servers, 0)) {
-            for (const auto &server : servers) {
-                // TODO walidacja wiadomosci tu czy wyzej? hm hm
-                server_response = ask_server_to_upload_file(server.ip_addr, filename.c_str());
-
-                if (can_upload_file(server_response)) {
-                    BOOST_LOG_TRIVIAL(trace) << "Creating thread";
-                    // TODO: variable: "running", thread checks wheter it's true, if not then it should terminate
-                    std::thread thread {&Client::upload_file_via_tcp, this, server.ip_addr,
-                                       htobe64(server_response.param), filename.c_str()};
-                    thread.detach();
-                    BOOST_LOG_TRIVIAL(trace) << "Thread detached";
-                    break;
-                }
-            }
+        if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) { // TODO is readable...
+            BOOST_LOG_TRIVIAL(trace) << "Invalid filename";
         } else {
-            cout << format("File %1% too big") %filename << endl;
+            multiset<ServerData, std::greater<>> servers = silent_discover();
+            int udp_socket = create_multicast_udp_socket();
+            if (at_least_on_server_has_space(servers, fs::file_size(file_path))) {
+                for (const auto &server : servers) {
+                    if (can_upload_file(udp_socket, server.ip_addr, file_path.filename().string(), server_response)) {
+                        upload_file_via_tcp(server.ip_addr, htobe64(server_response.param), file_path);
+                        break;
+                    }
+                }
+            } else {
+                cout << format("File %1% too big") %file_path << endl;
+            }
         }
 
         BOOST_LOG_TRIVIAL(trace) << "Ending upload procedure...";
     }
 
     /************************************************* REMOVE FILE ****************************************************/
-    void remove(const string& filename) {
+    void remove(string filename) {
         BOOST_LOG_TRIVIAL(trace) << "Starting remove file";
         SimpleMessage message {htobe64(generate_message_sequence()), cp::file_remove_request, filename.c_str()};
         int udp_socket = create_multicast_udp_socket(); // TODO i tu ładny try catch na tworzenie ;)
@@ -770,7 +762,7 @@ public:
 
         if (tokenized_input.size() > 2 || (tokenized_input.size() == 2 && no_parameter_allowed(tokenized_input[0])))
             throw invalid_user_input("too many parameters");
-        else if (tokenized_input.size() == 0)
+        else if (tokenized_input.empty())
             throw invalid_user_input("no command inserted");
         else if (tokenized_input.size() == 1 && is_param_required(tokenized_input[0]))
             throw invalid_user_input("command required parameter");
@@ -780,8 +772,6 @@ public:
         return {tokenized_input[0], ""};
     }
 
-
-
     void run() {
         string comm, param;
         bool exit = false;
@@ -789,7 +779,7 @@ public:
         while (!exit) {
             display_log_separator();
             cout << "Enter command: " << endl;
-
+            // TODO: variable: "running", thread checks wheter it's true, if not then it should terminate
             try {
                 auto[comm, param] = read_user_command();
                 boost::algorithm::to_lower(comm);
@@ -805,7 +795,7 @@ public:
                     } else if (comm == "fetch") {
                         fetch(param);
                     } else if (comm == "upload") {
-                        upload(param);
+                        handler(&Client::upload, this, param);
                     } else if (comm == "remove") {
                         remove(param);
                     } else {
