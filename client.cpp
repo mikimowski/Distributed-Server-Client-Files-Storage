@@ -182,21 +182,43 @@ class Client {
                 return false;
         return true;
     }
+//
+//    static bool is_valid_message(SimpleMessage message, uint64_t expected_message_seq) {
+//        if (be64toh(message.message_seq) != expected_message_seq)
+//            return false;
+//        if (!is_valid_string(message.data, const_variables::max_simple_data_size))
+//            return false;
+//        return true;
+//    }
+//
+//    static bool is_valid_message(ComplexMessage message, uint64_t expected_message_seq) {
+//        if (be64toh(message.message_seq) != expected_message_seq)
+//            return false;
+//        if (!is_valid_string(message.data, const_variables::max_complex_data_size))
+//            return false;
+//        return true;
+//    }
 
-    static bool is_valid_message(SimpleMessage message, uint64_t expected_message_seq) {
+    void message_validation(const ComplexMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
+        if (message_size < const_variables::complex_message_no_data_size)
+            throw invalid_message("message too small");
+        if (!is_expected_command(message.command, expected_command))
+            throw invalid_message("invalid command");
         if (be64toh(message.message_seq) != expected_message_seq)
-            return false;
-        if (!is_valid_string(message.data, const_variables::max_simple_data_size))
-            return false;
-        return true;
+            throw invalid_message("invalid message seq");
+        if (!is_valid_data(message.data, message_size - const_variables::complex_message_no_data_size)) //  TODO is it right? check!
+            throw invalid_message("invalid message data");
     }
 
-    static bool is_valid_message(ComplexMessage message, uint64_t expected_message_seq) {
+    void message_validation(const SimpleMessage& message, uint64_t expected_message_seq, const string& expected_command, ssize_t message_size) {
+        if (message_size < const_variables::simple_message_no_data_size)
+            throw invalid_message("message too small");
+        if (!is_expected_command(message.command, expected_command))
+            throw invalid_message("invalid command");
         if (be64toh(message.message_seq) != expected_message_seq)
-            return false;
-        if (!is_valid_string(message.data, const_variables::max_complex_data_size))
-            return false;
-        return true;
+            throw invalid_message("invalid message seq");
+        if (!is_valid_data(message.data, message_size - const_variables::complex_message_no_data_size)) //  TODO is it right? check!
+            throw invalid_message("invalid message data");
     }
 
 
@@ -258,22 +280,21 @@ class Client {
         cout << "Found " << server_ip << " (" << server_mcast_addr << ") with free space " << server_space << endl;
     }
 
-
     /**
      * @param udp_socket
      * @return Expected respond message's message_seq
      */
     uint64_t send_discover_message(int udp_socket) {
         uint64_t message_seq = generate_message_sequence();
-        SimpleMessage message{htobe64(message_seq), cp::discover_request};
+        SimpleMessage message {htobe64(message_seq), cp::discover_request};
         send_message_multicast_udp(udp_socket, message);
         return message_seq;
     }
 
     void receive_discover_response(int udp_socket, uint64_t expected_message_seq) {
-        struct ComplexMessage message_received{};
-        struct sockaddr_in source_address{};
-        socklen_t addr_length;
+        struct ComplexMessage message_received {};
+        struct sockaddr_in source_address {};
+        socklen_t addr_len;
         ssize_t recv_len;
         bool timeout_reached = false;
 
@@ -287,16 +308,19 @@ class Client {
             if (elapsed_time.count() / 1000 >= timeout) {
                 timeout_reached = true;
             } else {
-                addr_length = sizeof(struct sockaddr_in);
-                recv_len = recvfrom(udp_socket, &message_received, sizeof(struct ComplexMessage), 0, (struct sockaddr*)&source_address, &addr_length);
+                addr_len = sizeof(struct sockaddr_in);
+                recv_len = recvfrom(udp_socket, &message_received, sizeof(struct ComplexMessage), 0, (struct sockaddr*) &source_address, &addr_len);
                 if (recv_len >= 0) {
                     source_ip = inet_ntoa(source_address.sin_addr);
                     source_port = be16toh(source_address.sin_port);
-                    if (is_expected_command(message_received.command, cp::discover_response) && is_valid_message(message_received, expected_message_seq)) {
+
+                    try {
+                        message_validation(message_received, expected_message_seq, cp::discover_response, recv_len);
                         display_server_discovered_info(inet_ntoa(source_address.sin_addr), message_received.data, be64toh(message_received.param));
-                    } else {
-                        cerr << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<"." << endl;
-                        BOOST_LOG_TRIVIAL(info) << "[PCKG ERROR] Skipping invalid package from " << source_ip << ":" << source_port <<".";
+                    } catch (const invalid_message& e) {
+                        cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
+                        BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
+                        continue;
                     }
                 }
             }
@@ -713,13 +737,30 @@ public:
     {}
 
 
+    static vector<string> read_user_command() {
+        vector<string> tokenized_command;
+        string input;
+        getline(cin, input);
+        boost::split(tokenized_command, input, [](char c) {
+            return iswspace(c);
+        },
+        boost::token_compress_on);
+
+        if (tokenized_command.size() > 2)
+
+    }
+
+
+
     void run() {
         string comm, param;
         bool exit = false;
+        vector<string>
 
         while (!exit) {
             display_log_separator();
             cout << "Enter command: " << endl;
+
             cin >> comm;
             boost::algorithm::to_lower(comm);
             if (comm == "exit") {

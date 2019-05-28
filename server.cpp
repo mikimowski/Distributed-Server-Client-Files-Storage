@@ -118,8 +118,9 @@ ServerParameters parse_program_arguments(int argc, const char *argv[]) {
 class Server {
     const string multicast_address;
     in_port_t cmd_port;
-    uint64_t used_space = 0;
-    uint64_t max_available_space;
+    std::mutex used_space_mutex;
+    std::atomic<uint64_t> used_space = 0;
+    const uint64_t max_available_space;
     const string shared_folder;
     const uint16_t timeout;
 
@@ -127,7 +128,6 @@ class Server {
 
     /*** Receiving ***/
     int recv_socket;
-    struct ip_mreq ip_mreq;
 
     // TODO: Ask whether directories should be listed
     void generate_files_in_storage() {
@@ -161,6 +161,7 @@ class Server {
     }
 
     void join_multicast_group() {
+        struct ip_mreq ip_mreq;
         ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
         if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
             syserr("inet_aton");
@@ -169,6 +170,10 @@ class Server {
     }
 
     void leave_multicast_group() {
+        struct ip_mreq ip_mreq;
+        ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
+            syserr("inet_aton");
         if (setsockopt(recv_socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
             syserr("setsockopt");
     }
@@ -219,24 +224,33 @@ class Server {
     }
 
     uint64_t get_available_space() {
-        return this->used_space > this->max_available_space ? 0 : this->max_available_space - this->used_space;
+        uint64_t tmp = this->used_space; // threads...
+        return tmp > this->max_available_space ? 0 : this->max_available_space - tmp;
     }
 
-    bool is_enough_space(uint64_t file_size) {
-        return file_size <= this->get_available_space();
-    }
+//    bool is_enough_space(uint64_t file_size) {
+//        return file_size <= this->get_available_space();
+//    }
 
     /**
      * Attempts to reserve given amount of space
-     * @param file_size size of space to be reserved
+     * @param size size of space to be reserved
      * @return True if space was reserved successfuly, false otherwise.
      */
-    bool check_and_reserve_space(uint64_t file_size) {
-        // TODO lock
+    bool check_and_reserve_space(uint64_t size) {
+        std::lock_guard<std::mutex> lock(used_space_mutex);
+        if (size > max_available_space || used_space > max_available_space - size)
+            return false;
+        used_space += size;
+        return true;
     }
 
-    bool free_space(uint64_t file_size) {
-        // TODO lock
+    /**
+     * Use it correctly!
+     */
+    void free_space(uint64_t size) {
+        std::lock_guard<std::mutex> lock(used_space_mutex);
+        used_space -= size;
     }
 
     vector<fs::path>::iterator find_file(const string& filename) {
@@ -392,12 +406,12 @@ public:
 
 
     /**************************************************** UPLOAD ******************************************************/
-    static bool is_valid_filename(const string& filename) { // TODO max filename length?
-        std::regex filename_regex("[^-_.A-Za-z0-9]");
-        return std::regex_match(filename, filename_regex);
-    }
 
-    // TODO file_size = 0?
+    /* TODO file_size = 0?
+     *
+     *
+     * */
+
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
             const string& filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
@@ -406,12 +420,12 @@ public:
         if (!(can_upload = is_valid_filename(filename))) {
             BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, incorrect filename,"
                                               "received_filename = %1%") %filename;
-        } else if (!(can_upload = is_enough_space(file_size))) {
+        } else if (!(can_upload = check_and_reserve_space(file_size))) {
             BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, not enough space,"
                                               "requested_space = %1%") %file_size;
         }
 
-        if (can_upload) {
+        if (can_upload) { // TODO some failure, free space... + free filename here somewhere reserve this filename?
             BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
             auto[tcp_socket, tcp_port] = create_tcp_socket();
 
@@ -464,6 +478,7 @@ public:
     /**************************************************** REMOVE ******************************************************/
 
     // TODO What is someone is downloading this file in this moment?
+    // TODO validate filename or just skip it? ~ info ? incorrect filanem or sth? Or just don;t do anything if file not in filelist
     void handle_remove_request(const string& filename) {
         auto it = find_file(filename);
         string file = this->shared_folder + filename;
@@ -478,53 +493,11 @@ public:
         }
     }
 
-    /****************************************************** RUN *******************************************************/
-
-//    /**
-//     * Returns message's command.
-//     * @throw invalid_command excpetion if message's command is incorrect or unknown.
-//     * @param message - message which command is to be extracted.
-//     * @return string representing message's command.
-//     */
-//    static string get_message_command(const ComplexMessage& message) {
-//        if (is_valid_string(message.command, const_variables::max_command_length)) {
-//            if (message.command == cp::discover_request)
-//                return cp::discover_request;
-//            else if (message.command == cp::files_list_request)
-//                return cp::files_list_request;
-//            else if (message.command == cp::file_add_request)
-//                return cp::file_add_request;
-//            else if (message.command == cp::file_get_request)
-//                return cp::file_get_request;
-//            else if (message.command == cp::file_remove_request)
-//                return cp::file_remove_request;
-//        }
-//
-//        throw invalid_command();
-//    }
-
-    /**
-     *
-     * @return (message received, length of received message in bytes, source address)
-     */
-    tuple<ComplexMessage, ssize_t, struct sockaddr_in> receive_next_message() {
-        ComplexMessage message;
-        ssize_t recv_len;
-        struct sockaddr_in source_address{};
-        socklen_t addrlen = sizeof(struct sockaddr_in);
-
-        recv_len = recvfrom(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
-        if (recv_len < 0)
-            syserr("read");
-
-        return {message, recv_len, source_address};
-    }
-
     /************************************************** VALIDATION ****************************************************/
 
-
-    void filename_validation(const string& filename) {
-
+    static bool is_valid_filename(const string& filename) { // TODO max filename length?
+        std::regex filename_regex("[^-_.A-Za-z0-9]");
+        return std::regex_match(filename, filename_regex);
     }
 
     /**
@@ -565,6 +538,25 @@ public:
         } else {
             throw invalid_message("Invalid command");
         }
+    }
+
+    /****************************************************** RUN *******************************************************/
+
+    /**
+     *
+     * @return (message received, length of received message in bytes, source address)
+     */
+    tuple<ComplexMessage, ssize_t, struct sockaddr_in> receive_next_message() {
+        ComplexMessage message;
+        ssize_t recv_len;
+        struct sockaddr_in source_address{};
+        socklen_t addrlen = sizeof(struct sockaddr_in);
+
+        recv_len = recvfrom(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
+        if (recv_len < 0)
+            syserr("read");
+
+        return {message, recv_len, source_address};
     }
 
     template<typename... A>
