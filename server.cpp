@@ -4,6 +4,8 @@
 #include <random>
 #include <tuple>
 #include <thread>
+#include <regex>
+#include <atomic>
 
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
@@ -224,6 +226,19 @@ class Server {
         return file_size <= this->get_available_space();
     }
 
+    /**
+     * Attempts to reserve given amount of space
+     * @param file_size size of space to be reserved
+     * @return True if space was reserved successfuly, false otherwise.
+     */
+    bool check_and_reserve_space(uint64_t file_size) {
+        // TODO lock
+    }
+
+    bool free_space(uint64_t file_size) {
+        // TODO lock
+    }
+
     vector<fs::path>::iterator find_file(const string& filename) {
         for (auto it = this->files_in_storage.begin(); it != this->files_in_storage.end(); it++)
             if (it->filename() == filename)
@@ -256,7 +271,7 @@ public:
 
     /*************************************************** DISCOVER *****************************************************/
 
-    // TODO multicast mabyć w jakim formacie przesłany??
+    // TODO multicast ma być w jakim formacie przesłany??
     void handle_discover_request(const struct sockaddr_in& destination_address, uint64_t message_seq) {
         struct ComplexMessage message {htobe64(message_seq), cp::discover_response,
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
@@ -276,19 +291,11 @@ public:
         *start_index += filename.length();
     }
 
-    void handle_files_list_request(const struct sockaddr_in& recv_addr, uint64_t message_seq, const char *pattern) {
+    void handle_files_list_request(const struct sockaddr_in& destination_address, uint64_t message_seq, const char *pattern) {
         BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
         int sock;
         if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
             syserr("socket");
-
-        { // TODO czy to aby na pewno tak...
-            struct sockaddr_in destination_address{};
-            destination_address.sin_family = AF_INET;
-            destination_address.sin_port = htobe16(cmd_port);
-            if (inet_aton(multicast_address.c_str(), &destination_address.sin_addr) == 0) // TTODO jak to mcast... chyba zwykły jakis
-                syserr("inet_aton");
-        }
 
         uint64_t curr_data_len = 0;
         string filename;
@@ -299,54 +306,22 @@ public:
                 if (const_variables::max_simple_data_size > curr_data_len + filename.length()) {
                     fill_message_with_filename(message, &curr_data_len, file.filename().generic_string());
                 } else {
-                    send_message_udp(message, recv_addr, curr_data_len);
+                    send_message_udp(message, destination_address, curr_data_len);
                     curr_data_len = 0;
                     memset(&message.data, '\0', sizeof(message.data));
                 }
             }
         }
         if (curr_data_len > 0)
-            send_message_udp(message, recv_addr, curr_data_len);
+            send_message_udp(message, destination_address, curr_data_len);
 
         if (close(sock) < 0)
             syserr("close");
-        BOOST_LOG_TRIVIAL(trace) << "All files matching given pattern has been sent";
+        BOOST_LOG_TRIVIAL(trace) << format("Handled files list request, pattern = ") %pattern;
     }
 
 
     /************************************************* DOWNLOAD FILE **************************************************/
-
-    void send_file_via_tcp(int tcp_socket, const string& filename) {
-        BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
-
-        struct sockaddr_in source_address{};
-        memset(&source_address, 0, sizeof(source_address));
-        socklen_t len = sizeof(source_address);
-
-        // TODO use a non blocking socket on accept and wait for timeout seconds...
-        int sock = accept(tcp_socket, (struct sockaddr*) &source_address, &len);
-
-        fs::path file_path{this->shared_folder + filename};
-        std::ifstream file_stream{file_path.c_str(), std::ios::binary};
-
-        if (file_stream.is_open()) {
-            char buffer[MAX_BUFFER_SIZE];
-            while (file_stream) {
-                file_stream.read(buffer, MAX_BUFFER_SIZE);
-                ssize_t length = file_stream.gcount();
-                if (write(sock, buffer, length) != length)
-                    syserr("partial write");
-            }
-            file_stream.close(); // TODO can throw
-        } else {
-            cerr << "File opening error" << endl; // TODO
-        }
-
-        if (close(sock) < 0)
-            syserr("close");
-        BOOST_LOG_TRIVIAL(trace) << "Sending file via tcp finished";
-        cout << "File " << filename << " sent" << endl;
-    }
 
     /**
      * 1. Select free port
@@ -354,44 +329,103 @@ public:
      * 3. Wait on this port for TCP connection with the client
      */
     void handle_file_request(struct sockaddr_in &destination_address, uint64_t message_seq, const string& filename) {
-        BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename=" << filename;
+        BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename = " << filename;
         if (find_file(filename) != this->files_in_storage.end()) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
             ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename.c_str(), htobe64(tcp_port)};
             send_message_udp(message, destination_address, filename.length());
-            send_file_via_tcp(tcp_socket, filename);
+            BOOST_LOG_TRIVIAL(info) << format("TCP port info sent, port chosen = %1%") %tcp_port;
+            send_file_via_tcp(tcp_socket, tcp_port, filename);
 
             if (close(tcp_socket) < 0)
                 syserr("close");
-            BOOST_LOG_TRIVIAL(info) << "TCP port info sent";
         } else {
-            cout << "Incorrect file request received" << endl;
+            cout << "Incorrect file request received" << endl; // TODO co wypisywać?
         }
-        BOOST_LOG_TRIVIAL(info)  << "Finished file request, filename=" << filename;
+        BOOST_LOG_TRIVIAL(info)  << "Handled file request, filename = " << filename;
+    }
+
+    void send_file_via_tcp(int tcp_socket, uint16_t tcp_port, const string& filename) {
+        BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
+
+        fd_set set;
+        struct timeval timeval{};
+        FD_ZERO(&set);
+        FD_SET(tcp_socket, &set);
+
+        timeval.tv_sec = this->timeout;
+        int rv = select(tcp_socket + 1, &set, nullptr, nullptr, &timeval); // Wait for client up to timeout sec.
+        if (rv == -1) {
+            BOOST_LOG_TRIVIAL(error) << format("select, port = ") %tcp_port;
+        } else if (rv == 0) {
+            BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %tcp_port;
+        } else { // Client is waiting
+            struct sockaddr_in source_address{};
+            memset(&source_address, 0, sizeof(source_address));
+            socklen_t len = sizeof(source_address);
+
+            int sock = accept(tcp_socket, (struct sockaddr *) &source_address, &len);
+
+            fs::path file_path{this->shared_folder + filename};
+            std::ifstream file_stream{file_path.c_str(), std::ios::binary};
+
+            if (file_stream.is_open()) {
+                char buffer[MAX_BUFFER_SIZE];
+                while (file_stream) {
+                    file_stream.read(buffer, MAX_BUFFER_SIZE);
+                    ssize_t length = file_stream.gcount();
+                    if (write(sock, buffer, length) != length)
+                        syserr("partial write");
+                }
+                file_stream.close(); // TODO can throw
+            } else {
+                cerr << "File opening error" << endl; // TODO
+            }
+
+            if (close(sock) < 0)
+                syserr("close");
+            BOOST_LOG_TRIVIAL(info) << format("Sending file via tcp finished,"
+                                              "filename = %1%, port = %2%") %filename %tcp_port;
+        }
     }
 
 
     /**************************************************** UPLOAD ******************************************************/
+    static bool is_valid_filename(const string& filename) { // TODO max filename length?
+        std::regex filename_regex("[^-_.A-Za-z0-9]");
+        return std::regex_match(filename, filename_regex);
+    }
+
+    // TODO file_size = 0?
     void handle_upload_request(struct sockaddr_in &destination_address, uint64_t message_seq,
-            const char *filename, uint64_t file_size) {
+            const string& filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
-        if (is_enough_space(file_size)) {
+        bool can_upload;
+
+        if (!(can_upload = is_valid_filename(filename))) {
+            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, incorrect filename,"
+                                              "received_filename = %1%") %filename;
+        } else if (!(can_upload = is_enough_space(file_size))) {
+            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, not enough space,"
+                                              "requested_space = %1%") %file_size;
+        }
+
+        if (can_upload) {
             BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
-            auto [tcp_socket, tcp_port] = create_tcp_socket();
+            auto[tcp_socket, tcp_port] = create_tcp_socket();
 
             // Send info about tcp port
-            ComplexMessage message {htobe64(message_seq), cp::file_add_acceptance, "", htobe64(tcp_port)};
+            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, filename.c_str(), htobe64(tcp_port)};
             send_message_udp(message, destination_address);
             upload_file_via_tcp(tcp_socket, tcp_port, filename);
         } else {
-            BOOST_LOG_TRIVIAL(info) << "Rejecting file upload request";
-            SimpleMessage message {htobe64(message_seq), cp::file_add_refusal};
+            SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
             send_message_udp(message, destination_address);
         }
     }
 
-    void upload_file_via_tcp(int tcp_socket, uint16_t port, const char* filename) {
+    void upload_file_via_tcp(int tcp_socket, uint16_t port, const string& filename) {
         BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%") %port;
 
         fd_set set;
@@ -469,6 +503,10 @@ public:
 //        throw invalid_command();
 //    }
 
+    /**
+     *
+     * @return (message received, length of received message in bytes, source address)
+     */
     tuple<ComplexMessage, ssize_t, struct sockaddr_in> receive_next_message() {
         ComplexMessage message;
         ssize_t recv_len;
@@ -482,6 +520,13 @@ public:
         return {message, recv_len, source_address};
     }
 
+    /************************************************** VALIDATION ****************************************************/
+
+
+    void filename_validation(const string& filename) {
+
+    }
+
     /**
      * Basic message validation:
      * Assures that message's command is correct and data if required was attached. Doesn't validate data.
@@ -490,7 +535,7 @@ public:
      * @param message - message to be validated.
      * @param message_length - length of given message (bytes read from socket).
      */
-    void message_validation(const ComplexMessage& message, ssize_t message_length) {
+    static void message_validation(const ComplexMessage& message, ssize_t message_length) {
         if (is_valid_string(message.command, const_variables::max_command_length)) {
             if (message.command == cp::file_add_request) {
                 if (message_length < const_variables::complex_message_no_data_size)
@@ -616,14 +661,14 @@ void init() {
                     logging::keywords::auto_flush = true
             );
     logging::add_common_attributes();
-//    boost::log::core::get()->set_filter
-//            (
-//                    logging::trivial::severity >= logging::trivial::info
-//            );
 
   //  logging::core::get()->set_logging_enabled(false);
 }
 
+//    boost::log::core::get()->set_filter
+//            (
+//                    logging::trivial::severity >= logging::trivial::info
+//            );
 
 
 int main(int argc, const char *argv[]) {
