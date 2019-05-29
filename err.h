@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <string>
 
 /* Display information about system function error and ends the program */
 extern void syserr(const char *fmt, ...);
@@ -14,7 +15,7 @@ extern void syserr(const char *fmt, ...);
 extern void fatal(const char *fmt, ...);
 
 /* Displays information about error */
-extern void msgerr(const char *fmt, ...);
+extern void msgerr(const std::string& msg);
 
 
 #endif

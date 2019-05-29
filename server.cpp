@@ -370,16 +370,15 @@ public:
             send_file_via_tcp(tcp_socket, tcp_port, filename);
 
             if (close(tcp_socket) < 0)
-                syserr("close");
+                msgerr("close");
         } else {
             cout << "Incorrect file request received" << endl; // TODO co wypisywać?
         }
         BOOST_LOG_TRIVIAL(info)  << format("Handled file request, filename = %1%") %filename;
     }
 
-    // TODO error handling
     void send_file_via_tcp(int tcp_socket, uint16_t tcp_port, const string& filename) {
-        BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
+        BOOST_LOG_TRIVIAL(trace) << format("Starting sending file, port = %1%, filename = %2%") %tcp_port %filename;
 
         fd_set set;
         struct timeval timeval{};
@@ -389,36 +388,41 @@ public:
         timeval.tv_sec = this->timeout;
         int rv = select(tcp_socket + 1, &set, nullptr, nullptr, &timeval); // Wait for client up to timeout sec.
         if (rv == -1) {
-            BOOST_LOG_TRIVIAL(error) << format("select, port = %1%") %tcp_port;
+            msgerr("select, port = " + to_string(tcp_port));
         } else if (rv == 0) {
             BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %tcp_port;
         } else { // Client is waiting
+            int sock;
             struct sockaddr_in source_address{};
             memset(&source_address, 0, sizeof(source_address));
             socklen_t len = sizeof(source_address);
 
-            int sock = accept(tcp_socket, (struct sockaddr *) &source_address, &len);
-
-            fs::path file_path{this->shared_folder + filename};
-            std::ifstream file_stream{file_path.c_str(), std::ios::binary};
-
-            if (file_stream.is_open()) {
-                char buffer[MAX_BUFFER_SIZE];
-                while (file_stream) {
-                    file_stream.read(buffer, MAX_BUFFER_SIZE);
-                    ssize_t length = file_stream.gcount();
-                    if (write(sock, buffer, length) != length)
-                        syserr("partial write");
-                }
-                file_stream.close(); // TODO can throw
+            if ((sock = accept(tcp_socket, (struct sockaddr *) &source_address, &len)) < 0) {
+                msgerr("accept, port = " + to_string(tcp_port));
             } else {
-                cerr << "File opening error" << endl; // TODO
-            }
+                fs::path file_path{this->shared_folder + filename};
+                std::ifstream file_stream{file_path.c_str(), std::ios::binary};
 
-            if (close(sock) < 0)
-                syserr("close");
-            BOOST_LOG_TRIVIAL(info) << format("Sending file via tcp finished,"
-                                              "filename = %1%, port = %2%") %filename %tcp_port;
+                if (file_stream.is_open()) {
+                    char buffer[MAX_BUFFER_SIZE];
+                    while (file_stream) {
+                        file_stream.read(buffer, MAX_BUFFER_SIZE);
+                        ssize_t length = file_stream.gcount();
+                        if (write(sock, buffer, length) != length) {
+                            msgerr("write, port = " + to_string(tcp_port));
+                            break;
+                        }
+                    }
+                    file_stream.close();
+                    BOOST_LOG_TRIVIAL(info) << format("Sending file via tcp finished, port = %1%") % tcp_port;
+                } else {
+                    BOOST_LOG_TRIVIAL(error)
+                        << format("File opening error, filename = %1%, port = %2%") % filename % tcp_port << endl;
+                }
+
+                if (close(sock) < 0)
+                    msgerr("close, port = " + to_string(tcp_port));
+            }
         }
     }
 

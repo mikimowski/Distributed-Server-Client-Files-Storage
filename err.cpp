@@ -2,8 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <string.h>
+
+
+#include <string>
 #include "err.h"
+#include <iostream>
+#include <boost/log/trivial.hpp>
+#include <boost/format.hpp>
 
 void syserr(const char *fmt, ...) {
     va_list fmt_args;
@@ -39,13 +44,9 @@ void fatal(const char *fmt, ...){
     exit(EXIT_FAILURE);
 }
 
-void msgerr(const char *fmt, ...) {
-    va_list fmt_args;
+void msgerr(const std::string& msg) {
     int errno1 = errno;
 
-    fprintf(stderr, "ERROR: ");
-    va_start(fmt_args, fmt);
-    vfprintf(stderr, fmt, fmt_args);
-    va_end(fmt_args);
-    fprintf(stderr, " (%d; %s)\n", errno1, strerror(errno1));
+    std::cerr << boost::format("ERROR: %1% %2% %3%") %msg %errno %strerror(errno1);
+    BOOST_LOG_TRIVIAL(error) << boost::format("ERROR: %1% %2% %3%") %msg %errno %strerror(errno1);
 }
