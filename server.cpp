@@ -190,22 +190,22 @@ class Server {
             syserr("bind");
     }
 
-    void init_recv_socket() {
-        if ((recv_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-            syserr("socket");
-        join_multicast_group();
-
-        int reuse = 1; // TODO wywalić domyślnie?
-        if (setsockopt(recv_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
-            syserr("setsockopt(SO_REUSEADDR) failed");
-
-        struct sockaddr_in local_address{};
-        local_address.sin_family = AF_INET;
-        local_address.sin_addr.s_addr = htonl(INADDR_ANY);
-        local_address.sin_port = htons(cmd_port);
-        if (bind(recv_socket, (struct sockaddr*) &local_address, sizeof(local_address)) < 0)
-            syserr("bind");
-    }
+//    void init_recv_socket() {
+//        if ((recv_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+//            syserr("socket");
+//        join_multicast_group();
+//
+//        int reuse = 1; // TODO wywalić domyślnie?
+//        if (setsockopt(recv_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+//            syserr("setsockopt(SO_REUSEADDR) failed");
+//
+//        struct sockaddr_in local_address{};
+//        local_address.sin_family = AF_INET;
+//        local_address.sin_addr.s_addr = htonl(INADDR_ANY);
+//        local_address.sin_port = htons(cmd_port);
+//        if (bind(recv_socket, (struct sockaddr*) &local_address, sizeof(local_address)) < 0)
+//            syserr("bind");
+//    }
 
     void join_multicast_group() {
         struct ip_mreq ip_mreq;
@@ -225,6 +225,7 @@ class Server {
             syserr("setsockopt");
     }
 
+    // TODO jak ktoś tego uzywa to check czy potem jest tcp_socket >= 0 !!
     static tuple<int, in_port_t> create_tcp_socket() {
         int tcp_socket;
         struct sockaddr_in local_addr {};
@@ -233,13 +234,13 @@ class Server {
         local_addr.sin_family = AF_INET;
         local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
         if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-            syserr("socket");
+            msgerr("socket");
         if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
-            syserr("bind");
+            msgerr("bind");
         if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
-            syserr("listen");
+            msgerr("listen");
         if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
-            syserr("getsockname");
+            msgerr("getsockname");
         in_port_t tcp_port = be16toh(local_addr.sin_port);
 
         BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
@@ -249,14 +250,14 @@ class Server {
     void send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::simple_message_no_data_size + data_length;
         if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-            syserr("sendto");
+            msgerr("sendto");
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
     void send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length = 0) {
         uint16_t message_length = const_variables::complex_message_no_data_size + data_length;
         if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-            syserr("sendto");
+            msgerr("sendto");
         BOOST_LOG_TRIVIAL(info) << "UDP command sent";
     }
 
@@ -494,7 +495,7 @@ public:
             // TODO if failure ~ remove filename, free space
 
             if (close(sock) < 0)
-                syserr("close");
+                msgerr("close");
 
             BOOST_LOG_TRIVIAL(trace) << format("Ending uploading file via tcp, port:%1%") %port;
         }
@@ -575,7 +576,7 @@ public:
 
         recv_len = recvfrom(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
         if (recv_len < 0)
-            syserr("read");
+            msgerr("read");
 
         return {message, recv_len, source_address};
     }
