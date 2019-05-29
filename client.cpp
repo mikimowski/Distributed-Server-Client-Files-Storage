@@ -655,7 +655,7 @@ class Client {
     /***************************************************** EXIT *******************************************************/
     void exit() {
         BOOST_LOG_TRIVIAL(trace) << "Exit";
-        exit(0);
+        std::exit(0);
     }
 
 public:
@@ -734,8 +734,6 @@ public:
         tokenized_input.erase(tokenized_input.begin());
         if (!tokenized_input.empty())
             param = boost::algorithm::join(tokenized_input, " ");
-//        if (tokenized_input.size() == 2)
-//            return {tokenized_input[0], boost::algorithm::join(tokenized_input[1])};
         return {command, param};
     }
 
