@@ -6,6 +6,7 @@
 #include <thread>
 #include <regex>
 #include <mutex>
+#include <chrono>
 
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
@@ -127,11 +128,17 @@ class Server {
     std::mutex files_in_storage_mutex;
     std::set<string> files_in_storage;
 
+    /// Returns true if element was successuly added, false otherwise
     bool add_file_to_storage(const string& filename) {
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
         return files_in_storage.insert(filename).second;
     }
 
+    /**
+     * Removes filename from set of filenames in storage
+     * @param filename filename to be removed from set
+     * @return Number of elements erased
+     */
     int remove_file_from_storage(const string &filename) {
         std::lock_guard<std::mutex> lock(files_in_storage_mutex);
         return files_in_storage.erase(filename);
@@ -258,7 +265,6 @@ class Server {
         return tmp > this->max_available_space ? 0 : this->max_available_space - tmp;
     }
 
-
     /**
      * Attempts to reserve given amount of space
      * @param size size of space to be reserved
@@ -305,7 +311,7 @@ public:
     /*************************************************** DISCOVER *****************************************************/
 
     // TODO multicast ma być w jakim formacie przesłany??
-    void handle_discover_request(struct sockaddr_in destination_address, uint64_t message_seq) {
+    void handle_discover_request(const struct sockaddr_in& destination_address, uint64_t message_seq) {
         struct ComplexMessage message {htobe64(message_seq), cp::discover_response,
                 this->multicast_address.c_str(), htobe64(this->get_available_space())};
         BOOST_LOG_TRIVIAL(info) << format("Sending to: %1%:%2%")
@@ -324,7 +330,7 @@ public:
     }
 
     void handle_files_list_request(struct sockaddr_in destination_address, uint64_t message_seq, string pattern) {
-        BOOST_LOG_TRIVIAL(trace) << "Files list request for pattern: " << pattern;
+        BOOST_LOG_TRIVIAL(trace) << format("Files list request for pattern: %1%") %pattern;
         uint64_t curr_data_len = 0;
         struct SimpleMessage message {htobe64(message_seq), cp::files_list_response};
 
@@ -354,7 +360,7 @@ public:
      * 3. Wait on this port for TCP connection with the client
      */
     void handle_file_request(struct sockaddr_in destination_address, uint64_t message_seq, string filename) {
-        BOOST_LOG_TRIVIAL(info)  << "Starting file request, filename = " << filename;
+        BOOST_LOG_TRIVIAL(info)  << format("Starting file request, filename = %1%") %filename;
         if (is_in_storage(filename)) {
             auto [tcp_socket, tcp_port] = create_tcp_socket();
 
@@ -368,9 +374,10 @@ public:
         } else {
             cout << "Incorrect file request received" << endl; // TODO co wypisywać?
         }
-        BOOST_LOG_TRIVIAL(info)  << "Handled file request, filename = " << filename;
+        BOOST_LOG_TRIVIAL(info)  << format("Handled file request, filename = %1%") %filename;
     }
 
+    // TODO error handling
     void send_file_via_tcp(int tcp_socket, uint16_t tcp_port, const string& filename) {
         BOOST_LOG_TRIVIAL(trace) << "Starting sending file via tcp...";
 
@@ -427,34 +434,30 @@ public:
             string filename, uint64_t file_size) {
         BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
         bool can_upload;
+        string rejection_reason;
 
-//        if (!(can_upload = is_valid_filename(filename))) {
-//            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, incorrect filename,"
-//                                              "received_filename = %1%") %filename;
-//        } else
         if (!(can_upload = check_and_reserve_space(file_size))) {
-            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, not enough space,"
-                                              " requested_space = %1%") %file_size;
+            rejection_reason = "not enough space";
         } else if (!(can_upload = add_file_to_storage(filename))) {
-                BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, file already in storage,"
-                                                  " filename = %1%") % filename;
-        } else { // TODO some failure, free space... + free filename here somewhere reserve this filename?
-            BOOST_LOG_TRIVIAL(info) << "Accepting file upload request";
+            rejection_reason = "file already in storage";
+        } else {
+            BOOST_LOG_TRIVIAL(info) << format("Accepting file upload request, filename = %1%, filesize = %2%") %filename %file_size;
             auto[tcp_socket, tcp_port] = create_tcp_socket();
 
-            // Send info about tcp port
-            ComplexMessage message{htobe64(message_seq), cp::file_add_acceptance, filename.c_str(),
-                                   htobe64(tcp_port)};
-            send_message_udp(message, destination_address);
+            ComplexMessage message {htobe64(message_seq), cp::file_add_acceptance, filename.c_str(), htobe64(tcp_port)};
+            send_message_udp(message, destination_address);   // Send info about tcp port
             upload_file_via_tcp(tcp_socket, tcp_port, filename);
         }
 
         if (!can_upload) {
+            BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, filename = %1%, filesize = %2%, %3%") %filename %file_size %rejection_reason;
             SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
             send_message_udp(message, destination_address);
         }
+        BOOST_LOG_TRIVIAL(info) << format("Handled file upload request, filename = %1%, filesize = %2%") %filename %file_size;
     }
 
+    // TODO error handling
     void upload_file_via_tcp(int tcp_socket, uint16_t port, const string& filename) {
         BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%") %port;
 
@@ -468,7 +471,7 @@ public:
         if (rv == -1) {
             BOOST_LOG_TRIVIAL(error) << "select";
         } else if (rv == 0) {
-            BOOST_LOG_TRIVIAL(info) << format("Timeout occured on port:%1% no message received") %port;
+            BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %port;
         } else {
             struct sockaddr_in source_address{};
             memset(&source_address, 0, sizeof(source_address));
@@ -495,26 +498,24 @@ public:
 
     /**************************************************** REMOVE ******************************************************/
 
-    // TODO What is someone is downloading this file in this moment?
-    // TODO validate filename or just skip it? ~ info ? incorrect filanem or sth? Or just don;t do anything if file not in filelist
     void handle_remove_request(string filename) {
         if (this->remove_file_from_storage(filename) > 0) {
-            BOOST_LOG_TRIVIAL(info) << "Deleting file, filename = " << filename;
+            BOOST_LOG_TRIVIAL(info) << format("Deleting file, filename = %1%") %filename;
             fs::path file_path = this->shared_folder + filename;
-            free_space(fs::file_size(file_path));
-            fs::remove(file_path);
-            BOOST_LOG_TRIVIAL(info) << "File successfully deleted, filename = " << filename;
+
+            try {
+                free_space(fs::file_size(file_path));
+                fs::remove(file_path);
+            } catch (const exception& e) {
+                BOOST_LOG_TRIVIAL(error) << format("File deletion error, filename = %1%, %2%") %filename %e.what();
+            }
+            BOOST_LOG_TRIVIAL(info) << format("File successfully deleted, filename = %1%") %filename;
         } else {
-            BOOST_LOG_TRIVIAL(info) << "Skipping deleting file, no such file in storage";
+            BOOST_LOG_TRIVIAL(info) << format("Skipping deleting file, no such file in storage, filename = %1%") %filename;
         }
     }
 
     /************************************************** VALIDATION ****************************************************/
-
-//    static bool is_valid_filename(const string& filename) { // TODO max filename length?
-//        std::regex filename_regex("^(\\w|\\d|\\.)+$"); // TODO :<
-//        return std::regex_match(filename, filename_regex);
-//    }
 
     /**
      * Basic message validation:
@@ -593,9 +594,6 @@ public:
                 continue;
             }
 
-            /// For each message received main thread creates handler and passes to it full reponsibility for handling request.
-            /// That is handling inccorect data, informing client about this etc.
-            /// The only thing main thread guarantees is that message passed is correct size-wise and command-wise
             if (message_complex.command == cp::file_add_request) {
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << message_complex;
                 handler(&Server::handle_upload_request, this, std::ref(source_address),
@@ -605,8 +603,7 @@ public:
                 BOOST_LOG_TRIVIAL(info) << "Message received: " << *message_simple;
 
                 if (message_simple->command == cp::discover_request) {
-                    handler(&Server::handle_discover_request, this,
-                            std::ref(source_address), be64toh(message_simple->message_seq));
+                    handle_discover_request(source_address, be64toh(message_simple->message_seq));
                 } else if (message_simple->command == cp::files_list_request) {
                     handler(&Server::handle_files_list_request, this, std::ref(source_address),
                             be64toh(message_simple->message_seq), message_simple->data);
@@ -614,7 +611,7 @@ public:
                     handler(&Server::handle_file_request, this, std::ref(source_address),
                             be64toh(message_simple->message_seq), message_simple->data);
                 } else if (message_simple->command == cp::file_remove_request) {
-                    handler(&Server::handle_remove_request, this, message_simple->data);
+                    handle_remove_request(message_simple->data);
                 }
             }
         }
@@ -646,12 +643,6 @@ void init() {
 
   //  logging::core::get()->set_logging_enabled(false);
 }
-
-//    boost::log::core::get()->set_filter
-//            (
-//                    logging::trivial::severity >= logging::trivial::info
-//            );
-
 
 int main(int argc, const char *argv[]) {
     init();
