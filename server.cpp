@@ -23,6 +23,7 @@
 #include <netdb.h>
 
 #include "server.h"
+#include "helper.h"
 #include "err.h"
 
 #ifdef __APPLE__
