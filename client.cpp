@@ -61,7 +61,7 @@ static int create_multicast_udp_socket() {
         syserr("setsockopt broadcast");
 
     /* ustawienie TTL dla datagramów rozsyłanych do grupy */
-    optval = TTL;
+    optval = 5;
     if (setsockopt(mcast_udp_socket, IPPROTO_IP, IP_MULTICAST_TTL, (void*)&optval, sizeof optval) < 0)
         syserr("setsockopt multicast ttl");
 
@@ -125,7 +125,6 @@ static void message_validation(const SimpleMessage& message, uint64_t expected_m
         throw invalid_message("invalid message data");
     if (!expected_data.empty() && expected_data != message.data)
         throw invalid_message("unexpected data received");
-
 }
 
 // TODO throw expection if failed... ?? no way of failure...
@@ -287,8 +286,8 @@ multiset<Client::ServerData, std::greater<>> Client::silent_discover() {
 
 /************************************************** GET FILES LIST ****************************************************/
 
-void Client::display_and_update_files_list(char *data, uint32_t list_length, const char *server_ip) {
-    char *filename = strtok(data, "\n");
+void Client::display_and_update_files_list(char* data, const char* server_ip) {
+    char* filename = strtok(data, "\n");
     while (filename != nullptr) {
         cout << filename << " (" << server_ip << ")" << endl;
         this->last_search_results[filename] = server_ip;
@@ -297,8 +296,10 @@ void Client::display_and_update_files_list(char *data, uint32_t list_length, con
 }
 
 uint64_t Client::send_get_files_list_message(int udp_socket, const string &pattern) {
-    SimpleMessage message{htobe64(generate_message_sequence()), cp::files_list_request, pattern.c_str()};
+    uint64_t message_seq = generate_message_sequence();
+    SimpleMessage message{htobe64(message_seq), cp::files_list_request, pattern.c_str()};
     send_message_multicast_udp(udp_socket, message, pattern.length());
+    return message_seq;
 }
 
 void Client::receive_search_respond(int udp_socket, uint64_t expected_message_seq) {
@@ -316,8 +317,8 @@ void Client::receive_search_respond(int udp_socket, uint64_t expected_message_se
             auto [source_ip, source_port] = unpack_sockaddr(source_address);
 
             try {
-                message_validation(message, expected_message_seq, cp::discover_response, recv_len);
-                display_and_update_files_list(message.data, recv_len - cp::simple_message_no_data_size, source_ip.c_str());
+                message_validation(message, expected_message_seq, cp::files_list_response, recv_len);
+                display_and_update_files_list(message.data, source_ip.c_str());
             } catch (const invalid_message &e) {
                 cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%\n") %source_ip %source_port %e.what();
                 BOOST_LOG_TRIVIAL(error) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%\n") %source_ip %source_port %e.what();
@@ -419,7 +420,7 @@ bool Client::can_upload_file(int udp_socket, const char* server_ip, const string
 }
 
 /// return sent message's message_sequence
-uint64_t Client::send_upload_file_request(int udp_socket, const char *destination_ip, const string &filename) {
+uint64_t Client::send_upload_file_request(int udp_socket, const char* destination_ip, const string &filename) {
     uint64_t message_sequence = generate_message_sequence();
     ComplexMessage message{htobe64(message_sequence), cp::file_add_request, filename.c_str(), htobe64(get_file_size(this->out_folder + filename))};
     send_message_unicast_udp(udp_socket, destination_ip, message, filename.length());

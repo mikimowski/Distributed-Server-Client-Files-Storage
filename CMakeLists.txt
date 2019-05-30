@@ -17,7 +17,7 @@ add_executable(s server.cpp server.h helper.h communication_protocol.h err.h)
 add_executable(helper helper.cpp err.cpp)
 add_executable(communication_protocol communication_protocol.cpp helper.cpp err.cpp)
 add_executable(server server.cpp communication_protocol.cpp helper.cpp err.cpp)
-add_executable(netstore-server1 netstore_server.cpp server.cpp communication_protocol.cpp helper.cpp err.cpp)
+add_executable(netstore-server1 netstore_server.cpp server.cpp tcp_socket.cpp udp_socket.cpp inet_socket.cpp communication_protocol.cpp helper.cpp err.cpp)
 add_executable(netstore-client1 netstore_client.cpp client.cpp communication_protocol.cpp helper.cpp err.cpp)
 add_executable(inet inet_socket.cpp tcp_socket.cpp udp_socket.cpp)
 

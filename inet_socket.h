@@ -19,13 +19,20 @@ public:
     inet_socket();
 
     void set_reuse_address();
+
     void set_timeout(__time_t seconds, __suseconds_t microseconds);
+
     int get_port();
 
     void listen();
+    /** Binds on random port **/
     void bind();
+
     void connect(const std::string& destination_ip, in_port_t destination_port);
 
+    /* Can be closed manually, although it's better to use RAII...*/
+    void close();
+    /* Closes socket */
     virtual ~inet_socket();
 };
 
@@ -35,7 +42,7 @@ class socket_failure : public std::exception {
 public:
     explicit socket_failure(std::string message);
 
-    const char *what() const noexcept override;
+    const char* what() const noexcept override;
 };
 
 

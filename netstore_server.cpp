@@ -35,7 +35,7 @@ static void exit_procedure(int sig) {
 
     std::unique_lock<std::mutex> lock(exit_mutex);
     running_threads_cv.wait(lock, [] {
-        return get_server().no_threads_running();
+        return get_server().stopped();
     });
     cout << "No more threads!" << endl;
     //exit(0); // TODO raczej to server powinien się wyłączyć...
@@ -58,7 +58,7 @@ void init() {
     //  logging::core::get()->set_logging_enabled(false);
 }
 
-ServerConfiguration parse_program_arguments(int argc, const char *argv[]) {
+ServerConfiguration parse_program_arguments(int argc, const char* argv[]) {
     ServerConfiguration server_configuration;
 
     po::options_description description {"Program options"};
@@ -99,7 +99,7 @@ ServerConfiguration parse_program_arguments(int argc, const char *argv[]) {
 }
 
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
     init();
     ServerConfiguration server_configuration = parse_program_arguments(argc, argv);
     get_server(&server_configuration);

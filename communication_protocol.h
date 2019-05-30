@@ -31,11 +31,11 @@ struct __attribute__((__packed__)) ComplexMessage {
 
     ComplexMessage();
 
-    ComplexMessage(uint64_t message_seq, const std::string& command, const char *data = "", uint64_t param = 0);
+    ComplexMessage(uint64_t message_seq, const std::string& command, const char* data = "", uint64_t param = 0);
 
     void init();
 
-    friend std::ostream& operator << (std::ostream& out, ComplexMessage& rhs);
+    friend std::ostream& operator << (std::ostream& out, const ComplexMessage& rhs);
 };
 
 /*********************************************** COMPLEX MESSAGE ******************************************************/
@@ -51,7 +51,7 @@ struct __attribute__((__packed__)) SimpleMessage {
 
     void init();
 
-    friend std::ostream& operator << (std::ostream& out, SimpleMessage& rhs);
+    friend std::ostream& operator << (std::ostream& out, const SimpleMessage& rhs);
 };
 
 

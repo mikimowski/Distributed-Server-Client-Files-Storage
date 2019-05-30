@@ -8,7 +8,7 @@ ComplexMessage::ComplexMessage() {
     init();
 }
 
-ComplexMessage::ComplexMessage(uint64_t message_seq, const std::string &command, const char *data, uint64_t param) {
+ComplexMessage::ComplexMessage(uint64_t message_seq, const std::string &command, const char* data, uint64_t param) {
     init();
     this->message_seq = message_seq;
     strcpy(this->command, command.c_str());
@@ -23,7 +23,7 @@ void ComplexMessage::init() {
     memset(&data, '\0', communication_protocol::max_complex_data_size + 1);
 }
 
-std::ostream &operator<<(std::ostream &out, ComplexMessage &rhs) {
+std::ostream &operator<<(std::ostream &out, const ComplexMessage &rhs) {
     out << "[COMMAND = " << rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [PARAM = " << rhs.param
         << "] [DATA = " << rhs.data << "]";
     return out;
@@ -33,7 +33,7 @@ SimpleMessage::SimpleMessage() {
     init();
 }
 
-SimpleMessage::SimpleMessage(uint64_t message_seq, const std::string &command, const char *data) {
+SimpleMessage::SimpleMessage(uint64_t message_seq, const std::string &command, const char* data) {
     init();
     this->message_seq = message_seq;
     strcpy(this->command, command.c_str());
@@ -46,7 +46,7 @@ void SimpleMessage::init() {
     memset(&data, '\0', communication_protocol::max_simple_data_size + 1);
 }
 
-std::ostream &operator<<(std::ostream &out, SimpleMessage &rhs) {
+std::ostream &operator<<(std::ostream &out, const SimpleMessage &rhs) {
     out << "[COMMAND = " << rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [DATA = " << rhs.data << "]";
     return out;
 }

@@ -25,7 +25,7 @@ using std::string;
  * @param end
  * @return
  */
-bool is_empty(const char *str, size_t start, size_t end) {
+bool is_empty(const char* str, size_t start, size_t end) {
     for (size_t i = start; i < end; i++)
         if (str[i] != '\0')
             return false;
@@ -33,7 +33,7 @@ bool is_empty(const char *str, size_t start, size_t end) {
 }
 
 /// Must be ended with '\0'
-bool is_valid_string(const char *str, uint64_t max_len) {
+bool is_valid_string(const char* str, uint64_t max_len) {
     uint64_t i = 0;
     while (i < max_len && str[i] != '\0')
         i++;
@@ -44,7 +44,7 @@ bool is_valid_string(const char *str, uint64_t max_len) {
     return str[max_len - 1] == '\0';
 }
 
-bool is_valid_data(const char *data, uint64_t length) {
+bool is_valid_data(const char* data, uint64_t length) {
     for (uint64_t i = 1; i < length; i++) {
         if (data[i] != '\0' && data[i - 1] == '\0')
             return false;
@@ -85,7 +85,7 @@ size_t get_file_size(const string &file) {
 invalid_message::invalid_message(std::string message)
         : message(std::move(message)) {}
 
-const char *invalid_message::what() const noexcept {
+const char* invalid_message::what() const noexcept {
     return this->message.c_str();
 }
 
@@ -93,7 +93,7 @@ const char *invalid_message::what() const noexcept {
 invalid_user_input::invalid_user_input(std::string message)
         : message(std::move(message)) {}
 
-const char *invalid_user_input::what() const noexcept {
+const char* invalid_user_input::what() const noexcept {
     return this->message.c_str();
 }
 

@@ -9,6 +9,8 @@
 
 #include "server_configuration.h"
 #include "communication_protocol.h"
+#include "udp_socket.h"
+#include "tcp_socket.h"
 
 class Server {
     const std::string multicast_address = "";
@@ -28,8 +30,8 @@ class Server {
 
 
     /*** Receiving ***/
-    int recv_socket = -1;
-    int udp_send_socket = -1;
+    udp_socket recv_socket;
+    udp_socket send_socket;
 
     /// Returns true if element was successuly added, false otherwise
     bool add_file_to_storage(const std::string &filename);
@@ -47,17 +49,6 @@ class Server {
 
     void init_sockets();
 
-    void join_multicast_group();
-
-    void leave_multicast_group();
-
-    void send_message_udp(const SimpleMessage &message, const struct sockaddr_in &destination_address,
-                          uint16_t data_length = 0);
-
-    void send_message_udp(const ComplexMessage &message, const struct sockaddr_in &destination_address,
-                          uint16_t data_length = 0);
-
-
     uint64_t get_available_space();
 
     /**
@@ -72,6 +63,11 @@ class Server {
      */
     void free_space(uint64_t size);
 
+
+    void try_send_message(const SimpleMessage& message, const struct sockaddr_in& destination_address, uint16_t length);
+
+    void try_send_message(const ComplexMessage& message, const struct sockaddr_in& destination_address, uint16_t length);
+
     /*************************************************** DISCOVER *****************************************************/
 
     void handle_discover_request(const struct sockaddr_in &destination_address, uint64_t message_seq);
@@ -84,7 +80,7 @@ class Server {
 
     void handle_file_request(struct sockaddr_in destination_address, uint64_t message_seq, std::string filename);
 
-    void send_file_via_tcp(int tcp_socket, uint16_t tcp_port, const std::string &filename);
+    void send_file_via_tcp(tcp_socket& tcp_sock, const std::string& filename);
 
     /**************************************************** UPLOAD ******************************************************/
 
@@ -96,7 +92,7 @@ class Server {
                                std::string filename, uint64_t file_size);
 
     // TODO error handling
-    void upload_file_via_tcp(int tcp_socket, uint16_t port, const std::string &filename);
+    void upload_file_via_tcp(tcp_socket& tcp_sock, const std::string &filename);
 
 
     /**************************************************** REMOVE ******************************************************/
@@ -125,6 +121,8 @@ public:
     void stop();
 
     bool no_threads_running();
+
+    bool stopped();
 
     friend std::ostream &operator<<(std::ostream &out, const Server &server);
 };

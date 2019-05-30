@@ -1,3 +1,5 @@
+#include <utility>
+
 #include <mutex>
 #include <unistd.h>
 #include <stdint.h>
@@ -35,6 +37,8 @@ void inet_socket::bind() {
     local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (::bind(sock, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
         throw socket_failure("bind");
+
+    memset(&local_addr, 0, sizeof(local_addr));
     if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
         throw socket_failure("getsockname");
 
@@ -66,6 +70,31 @@ void inet_socket::set_timeout(__time_t seconds, __suseconds_t microseconds) {
         throw socket_failure("setsockopt 'SO_RCVTIMEO'");
 }
 
+void inet_socket::set_reuse_address() {
+    int reuse = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+        throw socket_failure("setsockopt 'SO_REUSEADDR' failed");
+}
+
+void inet_socket::close() {
+    if (::close(sock) < 0)
+        throw socket_failure("close");
+    closed = true;
+}
+
+int inet_socket::get_port() {
+    if (port == 0) {
+        struct sockaddr_in local_addr {};
+        socklen_t addrlen = sizeof(local_addr);
+        memset(&local_addr, 0, sizeof(local_addr));
+        if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
+            throw socket_failure("getsockname");
+
+        port = be16toh(local_addr.sin_port);
+    }
+
+    return port;
+}
 
 
 ///**
@@ -83,3 +112,11 @@ void inet_socket::set_timeout(__time_t seconds, __suseconds_t microseconds) {
 //    return true;
 //}
 //
+
+socket_failure::socket_failure(std::string message)
+    : message(std::move(message))
+    {}
+
+const char* socket_failure::what() const noexcept {
+    return this->message.c_str();
+}

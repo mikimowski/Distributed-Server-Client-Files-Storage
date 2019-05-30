@@ -4,8 +4,6 @@
 #include <utility>
 #include <thread>
 
-#define TTL 4
-#define TCP_QUEUE_LENGTH 5
 #define MAX_BUFFER_SIZE 50
 
 
@@ -17,12 +15,12 @@
  * @param end
  * @return
  */
-bool is_empty(const char *str, size_t start, size_t end);
+bool is_empty(const char* str, size_t start, size_t end);
 
 /// Must be ended with '\0'
-bool is_valid_string(const char *str, uint64_t max_len);
+bool is_valid_string(const char* str, uint64_t max_len);
 
-bool is_valid_data(const char *data, uint64_t length);
+bool is_valid_data(const char* data, uint64_t length);
 
 
 template<typename... A>
@@ -49,7 +47,7 @@ class invalid_message : public std::exception {
 public:
     explicit invalid_message(std::string message = "Invalid message");
 
-    const char *what() const noexcept override;
+    const char* what() const noexcept override;
 };
 
 class invalid_user_input : public std::exception {
@@ -57,7 +55,7 @@ class invalid_user_input : public std::exception {
 public:
     explicit invalid_user_input(std::string message = "Invalid message");
 
-    const char *what() const noexcept override;
+    const char* what() const noexcept override;
 };
 
 #endif //DISTRIBUTED_FILES_STORAGE_HELPER_H

@@ -115,7 +115,7 @@ class Client {
 
     /************************************************ GET FILES LIST **************************************************/
 
-    void display_and_update_files_list(char* data, uint32_t list_length, const char* server_ip);
+    void display_and_update_files_list(char* data, const char* server_ip);
 
     uint64_t send_get_files_list_message(int udp_socket, const std::string& pattern);
 
@@ -139,7 +139,7 @@ class Client {
 
     bool can_upload_file(int udp_socket, const char* server_ip, const std::string& filename, ComplexMessage& server_response);
     /// return sent message's message_sequence
-    uint64_t send_upload_file_request(int udp_socket, const char *destination_ip, const std::string &filename);
+    uint64_t send_upload_file_request(int udp_socket, const char* destination_ip, const std::string &filename);
 
     // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
     bool receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence, ComplexMessage& message, const std::string& expected_filename);

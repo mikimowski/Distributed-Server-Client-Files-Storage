@@ -17,7 +17,7 @@ namespace logging = boost::log;
 namespace cc = client_configuration;
 
 
-ClientConfiguration parse_program_arguments(int argc, const char *argv[]) {
+ClientConfiguration parse_program_arguments(int argc, const char* argv[]) {
     ClientConfiguration client_configuration{};
 
     po::options_description description {"Program options"};
@@ -67,7 +67,7 @@ void init() {
 }
 
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
     init();
 
     ClientConfiguration configuration = parse_program_arguments(argc, argv);
