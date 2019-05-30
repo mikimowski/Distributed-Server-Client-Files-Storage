@@ -14,8 +14,6 @@ using std::string;
 #include <utility>
 #include <thread>
 
-#define TTL 4
-#define TCP_QUEUE_LENGTH 5
 #define MAX_BUFFER_SIZE 50
 
 

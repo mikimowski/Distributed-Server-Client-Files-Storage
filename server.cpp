@@ -116,59 +116,59 @@ void Server::init_sockets() {
         syserr("bind");
 }
 
-void Server::join_multicast_group() {
-    struct ip_mreq ip_mreq;
-    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
-        syserr("inet_aton");
-    if (setsockopt(recv_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
-        syserr("setsockopt");
-}
+//void Server::join_multicast_group() {
+//    struct ip_mreq ip_mreq{};
+//    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+//    if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
+//        syserr("inet_aton");
+//    if (setsockopt(recv_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
+//        syserr("setsockopt");
+//}
 
-void Server::leave_multicast_group() {
-    struct ip_mreq ip_mreq;
-    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
-        syserr("inet_aton");
-    if (setsockopt(recv_socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
-        syserr("setsockopt");
-}
+//void Server::leave_multicast_group() {
+//    struct ip_mreq ip_mreq{};
+//    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+//    if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
+//        syserr("inet_aton");
+//    if (setsockopt(recv_socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
+//        syserr("setsockopt");
+//}
 
-void Server::send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
-    uint16_t message_length = cp::simple_message_no_data_size + data_length;
-    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        msgerr("sendto");
-    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
-}
+//void Server::send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
+//    uint16_t message_length = cp::simple_message_no_data_size + data_length;
+//    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
+//        msgerr("sendto");
+//    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
+//}
+//
+//void Server::send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
+//    uint16_t message_length = cp::complex_message_no_data_size + data_length;
+//    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
+//        msgerr("sendto");
+//    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
+//}
 
-void Server::send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
-    uint16_t message_length = cp::complex_message_no_data_size + data_length;
-    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        msgerr("sendto");
-    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
-}
-
-// TODO jak ktoś tego uzywa to check czy potem jest tcp_socket >= 0 !!
-static tuple<int, in_port_t> create_tcp_socket() {
-    int tcp_socket;
-    struct sockaddr_in local_addr {};
-    socklen_t addrlen = sizeof(local_addr);
-    memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
-    local_addr.sin_family = AF_INET;
-    local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-        msgerr("socket");
-    if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
-        msgerr("bind");
-    if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
-        msgerr("listen");
-    if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
-        msgerr("getsockname");
-    in_port_t tcp_port = be16toh(local_addr.sin_port);
-
-    BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
-    return {tcp_socket, tcp_port};
-}
+//// TODO jak ktoś tego uzywa to check czy potem jest tcp_socket >= 0 !!
+//static tuple<int, in_port_t> create_tcp_socket() {
+//    int tcp_socket;
+//    struct sockaddr_in local_addr {};
+//    socklen_t addrlen = sizeof(local_addr);
+//    memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
+//    local_addr.sin_family = AF_INET;
+//    local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+//    if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+//        msgerr("socket");
+//    if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
+//        msgerr("bind");
+//    if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
+//        msgerr("listen");
+//    if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
+//        msgerr("getsockname");
+//    in_port_t tcp_port = be16toh(local_addr.sin_port);
+//
+//    BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
+//    return {tcp_socket, tcp_port};
+//}
 
 
 uint64_t Server::get_available_space() {
@@ -319,7 +319,7 @@ void Server::send_file_via_tcp(int tcp_socket, uint16_t tcp_port, const string& 
 /******************************************************* UPLOAD *******************************************************/
 
 /* TODO file_size = 0?
- *
+ * TODO DON't let upload too much!
  *
  * */
 
@@ -465,6 +465,8 @@ tuple<ComplexMessage, ssize_t, struct sockaddr_in> Server::receive_next_message(
     socklen_t addrlen = sizeof(struct sockaddr_in);
 
     recv_len = recvfrom(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
+    if (!server_running)
+        throw
     if (recv_len < 0)
         msgerr("read");
 
@@ -539,11 +541,10 @@ void Server::run() {
 
 void Server::stop() {
     server_running = false;
-   // close(recv_socket);
+    close(recv_socket);
 }
 
 bool Server::no_threads_running() {
-    return true;
     return running_threads == 0;
 }
 
