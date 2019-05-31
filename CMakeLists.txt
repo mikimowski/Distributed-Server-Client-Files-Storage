@@ -18,7 +18,7 @@ add_executable(helper helper.cpp err.cpp)
 add_executable(communication_protocol communication_protocol.cpp helper.cpp err.cpp)
 add_executable(server server.cpp communication_protocol.cpp helper.cpp err.cpp)
 add_executable(netstore-server1 netstore_server.cpp server.cpp tcp_socket.cpp udp_socket.cpp inet_socket.cpp communication_protocol.cpp helper.cpp err.cpp)
-add_executable(netstore-client1 netstore_client.cpp client.cpp communication_protocol.cpp helper.cpp err.cpp)
+add_executable(netstore-client1 netstore_client.cpp client.cpp tcp_socket.cpp udp_socket.cpp inet_socket.cpp communication_protocol.cpp helper.cpp err.cpp)
 add_executable(inet inet_socket.cpp tcp_socket.cpp udp_socket.cpp)
 
 target_link_libraries(netstore-server1 Boost::filesystem Boost::log -lpthread Boost::program_options)

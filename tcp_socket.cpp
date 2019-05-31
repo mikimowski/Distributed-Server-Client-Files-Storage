@@ -8,16 +8,62 @@
 
 #include "tcp_socket.h"
 
+tcp_socket::tcp_socket(tcp_socket &&rhs) noexcept {
+    sock = rhs.get_sock();
+    port = rhs.get_port();
+    closed = rhs.is_closed();
+    rhs.fake_close();
+}
+
+
+tcp_socket& tcp_socket::operator=(tcp_socket&& rhs) {
+    if (this != &rhs) {
+        sock = rhs.get_sock();
+        port = rhs.get_port();
+        closed = rhs.is_closed();
+        rhs.fake_close();
+    }
+
+    return *this;
+}
 
 void tcp_socket::create_socket() {
     if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
         throw socket_failure("socket");
+    struct sockaddr_in local_addr {};
+    socklen_t addrlen = sizeof(local_addr);
+    memset(&local_addr, 0, sizeof(local_addr));
+    if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
+        throw socket_failure("getsockname");
+    port = local_addr.sin_port;
     closed = false;
 }
 
 void tcp_socket::wrap_socket(int sock) {
+    struct sockaddr_in local_addr {};
+    socklen_t addrlen = sizeof(local_addr);
+    memset(&local_addr, 0, sizeof(local_addr));
+    if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
+        throw socket_failure("getsockname");
+    port = local_addr.sin_port;
     this->sock = sock;
     closed = false;
+}
+
+void tcp_socket::connect(const std::string& destination_ip, in_port_t destination_port) {
+    struct sockaddr_in destination_address{};
+    memset(&destination_address, 0, sizeof(destination_address));
+    destination_address.sin_family = AF_INET;
+    destination_address.sin_port = destination_port;
+    if (::inet_aton(destination_ip.c_str(), &destination_address.sin_addr) == 0)
+        throw socket_failure("inet_aton");
+    if (::connect(sock, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
+        throw socket_failure("connect");
+}
+
+void tcp_socket::listen() {
+    if (::listen(sock, TCP_QUEUE_LENGTH) < 0)
+        throw socket_failure("listen");
 }
 
 int tcp_socket::select(__time_t seconds, __suseconds_t microseconds) {
@@ -37,17 +83,17 @@ int tcp_socket::select(__time_t seconds, __suseconds_t microseconds) {
 
 
 tcp_socket tcp_socket::accept() {
-    int sock;
+    int fd;
     struct sockaddr_in source_address{};
     memset(&source_address, 0, sizeof(source_address));
     socklen_t len = sizeof(source_address);
 
-    if ((sock = ::accept(port, (struct sockaddr *) &source_address, &len)) < 0)
+    if ((fd = ::accept(sock, (struct sockaddr *) &source_address, &len)) < 0)
         throw socket_failure("accept");
-    tcp_socket new_sock;
-    new_sock.wrap_socket(sock);
+    tcp_socket new_socket;
+    new_socket.wrap_socket(fd);
 
-    return new_sock;
+    return new_socket;
 }
 
 void tcp_socket::write(char buffer[], ssize_t length) {

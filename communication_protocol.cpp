@@ -3,16 +3,16 @@
 #include <iostream>
 #include "communication_protocol.h"
 
+namespace cp = communication_protocol;
 
 ComplexMessage::ComplexMessage() {
     init();
 }
 
-ComplexMessage::ComplexMessage(uint64_t message_seq, const std::string &command, const char* data, uint64_t param) {
-    init();
+ComplexMessage::ComplexMessage(uint64_t message_seq, const std::string& command, const char* data, uint64_t param) {
     this->message_seq = message_seq;
-    strcpy(this->command, command.c_str());
-    strcpy(this->data, data);
+    strncpy(this->command, command.c_str(), cp::max_command_length);
+    strncpy(this->data, data, cp::max_complex_data_size);
     this->param = param;
 }
 
@@ -34,10 +34,10 @@ SimpleMessage::SimpleMessage() {
 }
 
 SimpleMessage::SimpleMessage(uint64_t message_seq, const std::string &command, const char* data) {
-    init();
+//    init();
     this->message_seq = message_seq;
-    strcpy(this->command, command.c_str());
-    strcpy(this->data, data);
+    strncpy(this->command, command.c_str(), cp::max_command_length);
+    strncpy(this->data, data, cp::max_simple_data_size);
 }
 
 void SimpleMessage::init() {

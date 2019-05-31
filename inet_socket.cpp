@@ -13,11 +13,6 @@
 
 namespace cp = communication_protocol;
 
-inet_socket::inet_socket()
-    : closed(true),
-    port(-1),
-    sock(-1)
-    {}
 
 inet_socket::~inet_socket() {
     if (!closed) {
@@ -26,6 +21,9 @@ inet_socket::~inet_socket() {
     }
 }
 
+void inet_socket::fake_close() {
+    closed = true;
+}
 
 /****************************************************** SETUP *********************************************************/
 
@@ -42,23 +40,7 @@ void inet_socket::bind() {
     if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
         throw socket_failure("getsockname");
 
-    port = be16toh(local_addr.sin_port);
-}
-
-void inet_socket::listen() {
-    if (::listen(sock, TCP_QUEUE_LENGTH) < 0)
-        throw socket_failure("listen");
-}
-
-void inet_socket::connect(const std::string& destination_ip, in_port_t destination_port) {
-    struct sockaddr_in destination_address{};
-    memset(&destination_address, 0, sizeof(destination_address));
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htobe16(destination_port);
-    if (::inet_aton(destination_ip.c_str(), &destination_address.sin_addr) == 0)
-        throw socket_failure("inet_aton");
-    if (::connect(sock, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
-        throw socket_failure("connect");
+    port = local_addr.sin_port;
 }
 
 void inet_socket::set_timeout(__time_t seconds, __suseconds_t microseconds) {
@@ -83,21 +65,17 @@ void inet_socket::close() {
 }
 
 int inet_socket::get_port() {
-    if (port == 0) {
-        struct sockaddr_in local_addr {};
-        socklen_t addrlen = sizeof(local_addr);
-        memset(&local_addr, 0, sizeof(local_addr));
-        if (::getsockname(sock, (struct sockaddr*) &local_addr, &addrlen) < 0)
-            throw socket_failure("getsockname");
-
-        port = be16toh(local_addr.sin_port);
-    }
-
     return port;
 }
 
+int inet_socket::get_sock() {
+    return sock;
+}
 
-///**
+bool inet_socket::is_closed() {
+    return closed;
+}
+
 // *
 // * @return True if socket was successfully closed, false if it was already closed.
 // */

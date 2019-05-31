@@ -47,6 +47,6 @@ void fatal(const char* fmt, ...){
 void msgerr(const std::string& msg) {
     int errno1 = errno;
 
-    std::cerr << boost::format("ERROR: %1% %2% %3%") %msg %errno %strerror(errno1);
+    std::cerr << boost::format("ERROR: %1% %2% %3%") %msg %errno %strerror(errno1) << std::endl;
     BOOST_LOG_TRIVIAL(error) << boost::format("ERROR: %1% %2% %3%") %msg %errno %strerror(errno1);
 }

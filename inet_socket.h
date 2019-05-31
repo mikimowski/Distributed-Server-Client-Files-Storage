@@ -8,27 +8,30 @@
 
 #define TTL 5
 #define TCP_QUEUE_LENGTH 5
-
+// TODO make abstract
 class inet_socket {
 protected:
     int sock;
     in_port_t port;
     bool closed;
 
+    void fake_close();
+
 public:
-    inet_socket();
 
     void set_reuse_address();
 
     void set_timeout(__time_t seconds, __suseconds_t microseconds);
 
+    /** @return port in big endian */
     int get_port();
 
-    void listen();
+    int get_sock();
+
+    bool is_closed();
+
     /** Binds on random port **/
     void bind();
-
-    void connect(const std::string& destination_ip, in_port_t destination_port);
 
     /* Can be closed manually, although it's better to use RAII...*/
     void close();

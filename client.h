@@ -26,7 +26,8 @@
 
 #include "client_configuration.h"
 #include "communication_protocol.h"
-
+#include "udp_socket.h"
+#include "tcp_socket.h"
 
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
@@ -67,11 +68,14 @@ class Client {
         }
     };
 
-
     const std::string mcast_addr;
     const uint16_t cmd_port;
     const std::string out_folder;
     const uint16_t timeout;
+
+    std::atomic<int> running_threads = 0;
+
+    udp_socket multicast_sock;
 
     std::mt19937_64 generator;
     std::uniform_int_distribution<uint64_t> uniform_distribution;
@@ -103,13 +107,13 @@ class Client {
      * @param udp_socket
      * @return Expected respond message's message_seq
      */
-    uint64_t send_discover_message(int udp_socket);
+    uint64_t send_discover_message(udp_socket& sock);
 
-    void receive_discover_response(int udp_socket, uint64_t expected_message_seq);
+    void receive_discover_response(udp_socket& sock, uint64_t expected_message_seq);
 
     void discover();
 
-    std::multiset<ServerData, std::greater<>> silent_discover_receive(int udp_socket, uint64_t expected_message_seq);
+    std::multiset<ServerData, std::greater<>> silent_discover_receive(udp_socket& sock, uint64_t expected_message_seq);
 
     std::multiset<ServerData, std::greater<>> silent_discover();
 
@@ -117,17 +121,15 @@ class Client {
 
     void display_and_update_files_list(char* data, const char* server_ip);
 
-    uint64_t send_get_files_list_message(int udp_socket, const std::string& pattern);
+    uint64_t send_get_files_list_message(const std::string& pattern);
 
-    void receive_search_respond(int udp_socket, uint64_t expected_message_seq);
+    void receive_search_respond(uint64_t expected_message_seq);
 
     void search(std::string pattern);
 
     /************************************************** FETCH FILE ****************************************************/
-    uint64_t send_get_file_message(int udp_socket, const char* destination_ip, const std::string &filename);
-
     // TODO jakiś fałszywy server mógłby się podszyć... trzeba srpawdzić czy otrzymano faktycznie od tego...
-    in_port_t receive_fetch_file_response(int udp_socket, uint64_t expected_message_seq, const std::string& expected_filename);
+    in_port_t receive_fetch_file_response(udp_socket& sock, uint64_t expected_message_seq, const std::string& expected_filename);
 
     // TODO error handlign
     void fetch_file_via_tcp(const std::string& server_ip, in_port_t server_port, const std::string& filename);
@@ -137,12 +139,10 @@ class Client {
 
     /************************************************* UPLOAD FILE ****************************************************/
 
-    bool can_upload_file(int udp_socket, const char* server_ip, const std::string& filename, ComplexMessage& server_response);
-    /// return sent message's message_sequence
-    uint64_t send_upload_file_request(int udp_socket, const char* destination_ip, const std::string &filename);
+    std::tuple<in_port_t, bool> can_upload_file(udp_socket& sock, const std::string&  server_ip, const std::string& filename);
 
     // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
-    bool receive_upload_file_response(int udp_socket, uint64_t expected_message_sequence, ComplexMessage& message, const std::string& expected_filename);
+    std::tuple<in_port_t, bool> receive_upload_file_response(udp_socket& sock, uint64_t expected_message_sequence, const std::string& expected_filename);
 
     // TODO error handling...
     void upload_file_via_tcp(const char* server_ip, in_port_t server_port, const boost::filesystem::path& file_path);

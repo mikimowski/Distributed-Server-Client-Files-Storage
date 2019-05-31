@@ -26,21 +26,21 @@
 #include "helper.h"
 #include "err.h"
 
-#ifdef __APPLE__
-#include <libkern/OSByteOrder.h>
-#define htobe16(x) OSSwapHostToBigInt16(x)
-#define htole16(x) OSSwapHostToLittleInt16(x)
-#define be16toh(x) OSSwapBigToHostInt16(x)
-#define le16toh(x) OSSwapLittleToHostInt16(x)
-#define htobe32(x) OSSwapHostToBigInt32(x)
-#define htole32(x) OSSwapHostToLittleInt32(x)
-#define be32toh(x) OSSwapBigToHostInt32(x)
-#define le32toh(x) OSSwapLittleToHostInt32(x)
-#define htobe64(x) OSSwapHostToBigInt64(x)
-#define htole64(x) OSSwapHostToLittleInt64(x)
-#define be64toh(x) OSSwapBigToHostInt64(x)
-#define le64toh(x) OSSwapLittleToHostInt64(x)
-#endif	/* __APPLE__ */
+//#ifdef __APPLE__
+//#include <libkern/OSByteOrder.h>
+//#define htobe16(x) OSSwapHostToBigInt16(x)
+//#define htole16(x) OSSwapHostToLittleInt16(x)
+//#define be16toh(x) OSSwapBigToHostInt16(x)
+//#define le16toh(x) OSSwapLittleToHostInt16(x)
+//#define htobe32(x) OSSwapHostToBigInt32(x)
+//#define htole32(x) OSSwapHostToLittleInt32(x)
+//#define be32toh(x) OSSwapBigToHostInt32(x)
+//#define le32toh(x) OSSwapLittleToHostInt32(x)
+//#define htobe64(x) OSSwapHostToBigInt64(x)
+//#define htole64(x) OSSwapHostToLittleInt64(x)
+//#define be64toh(x) OSSwapBigToHostInt64(x)
+//#define le64toh(x) OSSwapLittleToHostInt64(x)
+//#endif	/* __APPLE__ */
 
 using std::string;
 using std::cout;
@@ -97,7 +97,7 @@ void Server::init_sockets() {
     recv_socket.create_socket();
     recv_socket.join_multicast_group(multicast_address);
     recv_socket.set_reuse_address(); // TODO chcemy to?
-    recv_socket.bind(cmd_port);
+    recv_socket.bind(htobe16(cmd_port));
 
     send_socket.create_socket();
     send_socket.set_reuse_address(); // TODO chcemy to?
@@ -234,6 +234,7 @@ void Server::handle_files_list_request(struct sockaddr_in destination_address, u
     if (curr_data_len > 0)
         try_send_message(message, destination_address, curr_data_len);
 
+
     BOOST_LOG_TRIVIAL(trace) << format("Handled files list request, pattern = %1%") %pattern;
 }
 
@@ -254,10 +255,14 @@ void Server::handle_file_request(struct sockaddr_in destination_address, uint64_
             tcp_sock.bind();
             tcp_sock.listen();
 
-            ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename.c_str(), htobe64(tcp_sock.get_port())};
+            uint64_t tmp = htobe64(message_seq);
+            cout << tmp << endl;
+            ComplexMessage message{tmp, cp::file_get_response, filename.c_str(), htobe64(be16toh(tcp_sock.get_port()))};
+            BOOST_LOG_TRIVIAL(trace) << format("message to be sent: %1%") %message;
             send_socket.send(message, destination_address, filename.length());
+            BOOST_LOG_TRIVIAL(trace) << format("sent: %1%") %message;
 
-            BOOST_LOG_TRIVIAL(info) << format("TCP port info sent, port chosen = %1%") %tcp_sock.get_port();
+            BOOST_LOG_TRIVIAL(info) << format("TCP port info sent, port chosen = %1%") %be16toh(tcp_sock.get_port());
         } catch(const socket_failure& e) {
             msgerr(e.what());
             return;
@@ -271,7 +276,7 @@ void Server::handle_file_request(struct sockaddr_in destination_address, uint64_
 }
 
 void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
-    BOOST_LOG_TRIVIAL(trace) << format("Starting sending file, port = %1%, filename = %2%") %tcp_sock.get_port() %filename;
+    BOOST_LOG_TRIVIAL(trace) << format("Starting sending file, port = %1%, filename = %2%") %be16toh(tcp_sock.get_port()) %filename;
     int select_res;
 
     try {
@@ -282,7 +287,7 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
     }
 
     if (select_res == 0) {
-        BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %tcp_sock.get_port();
+        BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %be16toh(tcp_sock.get_port());
     } else { // Client is waiting
         tcp_socket sock;
         try {
@@ -309,10 +314,10 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
                     return;
                 }
             }
-            BOOST_LOG_TRIVIAL(info) << format("Sending file via tcp finished, port = %1%") %tcp_sock.get_port();
+            BOOST_LOG_TRIVIAL(info) << format("Sending file via tcp finished, port = %1%") %be16toh(tcp_sock.get_port());
         } else {
             BOOST_LOG_TRIVIAL(error)
-                << format("File opening error, filename = %1%, port = %2%") % filename %tcp_sock.get_port() << endl;
+                << format("File opening error, filename = %1%, port = %2%") % filename %be16toh(tcp_sock.get_port()) << endl;
         }
     }
 }
@@ -324,7 +329,6 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
  * TODO DON't let upload too much!
  *
  * */
-
 void Server::handle_upload_request(struct sockaddr_in destination_address, uint64_t message_seq,
                            string filename, uint64_t file_size) {
     BOOST_LOG_TRIVIAL(info) << format("File upload request, filename = %1%, filesize = %2%") %filename %file_size;
@@ -344,9 +348,10 @@ void Server::handle_upload_request(struct sockaddr_in destination_address, uint6
             tcp_sock.bind();
             tcp_sock.listen();
 
-            ComplexMessage message {htobe64(message_seq), cp::file_add_acceptance, filename.c_str(), htobe64(tcp_sock.get_port())};
+            ComplexMessage message {htobe64(message_seq), cp::file_add_acceptance, filename.c_str(), htobe64(be16toh(tcp_sock.get_port()))};
             send_socket.send(message, destination_address); // Send info about tcp port
         } catch(const socket_failure& e) {
+            // TODO free file space, remove from list etc - uzyć RAII
             msgerr(e.what());
             return;
         }
@@ -364,7 +369,7 @@ void Server::handle_upload_request(struct sockaddr_in destination_address, uint6
 
 // TODO error handling
 void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
-    BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%") %tcp_sock.get_port();
+    BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%") %be16toh(tcp_sock.get_port());
     int select_res;
 
     try {
@@ -375,12 +380,11 @@ void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
     }
 
     if (select_res == 0) {
-        BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %tcp_sock.get_port();
+        BOOST_LOG_TRIVIAL(info) << format("Timeout on port:%1% no message received") %be16toh(tcp_sock.get_port());
     } else {
         tcp_socket sock;
         try {
             sock = tcp_sock.accept();
-            sock.get_port();
         } catch(const socket_failure &e) {
             msgerr(e.what());
             return;
@@ -402,10 +406,10 @@ void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
             }
         } else {
             BOOST_LOG_TRIVIAL(error)
-                << format("File opening error, filename = %1%, port = %2%") % filename % tcp_sock.get_port();
+                << format("File opening error, filename = %1%, port = %2%") %filename %be16toh(tcp_sock.get_port());
         }
 
-        BOOST_LOG_TRIVIAL(trace) << format("Ending uploading file via tcp, port:%1%") %tcp_sock.get_port();
+        BOOST_LOG_TRIVIAL(trace) << format("Ending uploading file via tcp, port:%1%") %be16toh(tcp_sock.get_port());
     }
 }
 
@@ -484,7 +488,7 @@ static void message_validation(const ComplexMessage& message, ssize_t message_le
 //    struct sockaddr_in source_address{};
 //    socklen_t addrlen = sizeof(struct sockaddr_in);
 //
-//    recv_len = recvfrom(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
+//    recv_len = recvfrom_complex(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
 //    if (!server_running)
 //        throw
 //    if (recv_len < 0)
@@ -531,7 +535,7 @@ void Server::run() {
         BOOST_LOG_TRIVIAL(info) << "Waiting for client...";
         
         try {
-            std::tie(message_complex, message_length, source_address) = recv_socket.recvfrom();
+            std::tie(message_complex, message_length, source_address) = recv_socket.recvfrom_complex();
         } catch(const socket_failure& e) {
             if (!server_running) {   // Main thread is not counted as a thread!
                 BOOST_LOG_TRIVIAL(info) << "Closing server, run returning...\n";
@@ -541,12 +545,12 @@ void Server::run() {
                 continue;
             }
         }
-        source_ip = inet_ntoa(source_address.sin_addr);
-        source_port = be16toh(source_address.sin_port);
 
         try {
             message_validation(message_complex, message_length);
         } catch(const invalid_message& e) {
+            source_ip = inet_ntoa(source_address.sin_addr);
+            source_port = be16toh(source_address.sin_port);
             cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what() << endl;
             BOOST_LOG_TRIVIAL(info) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
             continue;
@@ -567,10 +571,11 @@ void Server::run() {
             if (message_simple->command == cp::discover_request) {
                 handle_discover_request(source_address, be64toh(message_simple->message_seq));
             } else if (message_simple->command == cp::files_list_request) {
-                handler(&Server::handle_files_list_request, this, std::ref(source_address),
+                handler(&Server::handle_files_list_request, this, source_address,
                         be64toh(message_simple->message_seq), message_simple->data);
+                running_threads
             } else if (message_simple->command == cp::file_get_request) {
-                handler(&Server::handle_file_request, this, std::ref(source_address),
+                handler(&Server::handle_file_request, this, source_address,
                         be64toh(message_simple->message_seq), message_simple->data);
             } else if (message_simple->command == cp::file_remove_request) {
                 handle_remove_request(message_simple->data);

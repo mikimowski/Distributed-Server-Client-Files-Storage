@@ -63,10 +63,16 @@ class Server {
      */
     void free_space(uint64_t size);
 
-
     void try_send_message(const SimpleMessage& message, const struct sockaddr_in& destination_address, uint16_t length);
 
     void try_send_message(const ComplexMessage& message, const struct sockaddr_in& destination_address, uint16_t length);
+
+    template<typename... A>
+    void handler(A &&... args) {
+        std::thread handler{std::forward<A>(args)...};
+        running_threads++;
+        handler.detach();
+    }
 
     /*************************************************** DISCOVER *****************************************************/
 

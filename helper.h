@@ -23,13 +23,6 @@ bool is_valid_string(const char* str, uint64_t max_len);
 bool is_valid_data(const char* data, uint64_t length);
 
 
-template<typename... A>
-void handler(A &&... args) {
-    std::thread handler{std::forward<A>(args)...};
-    handler.detach();
-}
-
-
 /**
  * @return True if given pattern is a substring of given string,
  *         false otherwise
