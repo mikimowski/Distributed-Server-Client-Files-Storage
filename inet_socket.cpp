@@ -43,7 +43,7 @@ void inet_socket::bind() {
     port = local_addr.sin_port;
 }
 
-void inet_socket::set_timeout(__time_t seconds, __suseconds_t microseconds) {
+void inet_socket::set_timeout(uint64_t seconds, uint64_t microseconds) {
     struct timeval timeval{};
     timeval.tv_sec = seconds;
     timeval.tv_usec = microseconds;

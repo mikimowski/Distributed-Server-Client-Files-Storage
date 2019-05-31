@@ -24,7 +24,9 @@ void ComplexMessage::init() {
 }
 
 std::ostream &operator<<(std::ostream &out, const ComplexMessage &rhs) {
-    out << "[COMMAND = " << rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [PARAM = " << rhs.param
+    char tmp[cp::max_command_length + 1];
+    strncpy(tmp, rhs.command, cp::max_command_length);
+    out << "[COMMAND = " << tmp << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [PARAM = " << rhs.param
         << "] [DATA = " << rhs.data << "]";
     return out;
 }
@@ -47,6 +49,8 @@ void SimpleMessage::init() {
 }
 
 std::ostream &operator<<(std::ostream &out, const SimpleMessage &rhs) {
-    out << "[COMMAND = " << rhs.command << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [DATA = " << rhs.data << "]";
+    char tmp[cp::max_command_length + 1];
+    strncpy(tmp, rhs.command, cp::max_command_length);
+    out << "[COMMAND = " << tmp << "] [MESSAGE_SEQ = " << rhs.message_seq << "] [DATA = " << rhs.data << "]";
     return out;
 }

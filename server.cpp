@@ -6,6 +6,7 @@
 #include <regex>
 #include <mutex>
 #include <chrono>
+#include <csignal>
 
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string.hpp>
@@ -25,22 +26,6 @@
 #include "server.h"
 #include "helper.h"
 #include "err.h"
-
-//#ifdef __APPLE__
-//#include <libkern/OSByteOrder.h>
-//#define htobe16(x) OSSwapHostToBigInt16(x)
-//#define htole16(x) OSSwapHostToLittleInt16(x)
-//#define be16toh(x) OSSwapBigToHostInt16(x)
-//#define le16toh(x) OSSwapLittleToHostInt16(x)
-//#define htobe32(x) OSSwapHostToBigInt32(x)
-//#define htole32(x) OSSwapHostToLittleInt32(x)
-//#define be32toh(x) OSSwapBigToHostInt32(x)
-//#define le32toh(x) OSSwapLittleToHostInt32(x)
-//#define htobe64(x) OSSwapHostToBigInt64(x)
-//#define htole64(x) OSSwapHostToLittleInt64(x)
-//#define be64toh(x) OSSwapBigToHostInt64(x)
-//#define le64toh(x) OSSwapLittleToHostInt64(x)
-//#endif	/* __APPLE__ */
 
 using std::string;
 using std::cout;
@@ -103,51 +88,6 @@ void Server::init_sockets() {
     send_socket.set_reuse_address(); // TODO chcemy to?
 }
 
-//void Server::leave_multicast_group() {
-//    struct ip_mreq ip_mreq{};
-//    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-//    if (inet_aton(this->multicast_address.c_str(), &ip_mreq.imr_multiaddr) == 0)
-//        syserr("inet_aton");
-//    if (setsockopt(recv_socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0)
-//        syserr("setsockopt");
-//}
-
-//void Server::send_message_udp(const SimpleMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
-//    uint16_t message_length = cp::simple_message_no_data_size + data_length;
-//    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-//        msgerr("sendto");
-//    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
-//}
-//
-//void Server::send_message_udp(const ComplexMessage &message, const struct sockaddr_in& destination_address, uint16_t data_length) {
-//    uint16_t message_length = cp::complex_message_no_data_size + data_length;
-//    if (sendto(udp_send_socket, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-//        msgerr("sendto");
-//    BOOST_LOG_TRIVIAL(info) << "UDP command sent";
-//}
-
-//// TODO jak ktoś tego uzywa to check czy potem jest tcp_socket >= 0 !!
-//static tuple<int, in_port_t> create_tcp_socket() {
-//    int tcp_socket;
-//    struct sockaddr_in local_addr {};
-//    socklen_t addrlen = sizeof(local_addr);
-//    memset(&local_addr, 0, sizeof(local_addr)); // sin_port set to 0, therefore it will be set random free port
-//    local_addr.sin_family = AF_INET;
-//    local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-//    if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-//        msgerr("socket");
-//    if (bind(tcp_socket, (struct sockaddr*) &local_addr, sizeof(local_addr)) < 0)
-//        msgerr("bind");
-//    if (listen(tcp_socket, TCP_QUEUE_LENGTH) < 0)
-//        msgerr("listen");
-//    if (getsockname(tcp_socket, (struct sockaddr*) &local_addr, &addrlen) < 0)
-//        msgerr("getsockname");
-//    in_port_t tcp_port = be16toh(local_addr.sin_port);
-//
-//    BOOST_LOG_TRIVIAL(info) << "TCP socket created, port chosen = " << tcp_port;
-//    return {tcp_socket, tcp_port};
-//}
-
 
 uint64_t Server::get_available_space() {
     uint64_t tmp = this->used_space; // threads...
@@ -180,7 +120,7 @@ void Server::try_send_message(const SimpleMessage& message, const struct sockadd
         send_socket.send(message, destination_address, length);
         BOOST_LOG_TRIVIAL(info) << format("Message sent: %1%") %message;
     } catch(const socket_failure& e) {
-        msgerr(e.what());
+        BOOST_LOG_TRIVIAL(error) << e.what();
     }
 }
 
@@ -189,7 +129,7 @@ void Server::try_send_message(const ComplexMessage& message, const struct sockad
         send_socket.send(message, destination_address, length);
         BOOST_LOG_TRIVIAL(info) << format("Message sent: %1%") %message;
     } catch(const socket_failure& e) {
-        msgerr(e.what());
+        BOOST_LOG_TRIVIAL(error) << e.what();
     }
 }
 
@@ -246,33 +186,28 @@ void Server::handle_files_list_request(struct sockaddr_in destination_address, u
  * 3. Wait on this port for TCP connection with the client
  */
 void Server::handle_file_request(struct sockaddr_in destination_address, uint64_t message_seq, string filename) {
-    BOOST_LOG_TRIVIAL(info)  << format("Starting file request, filename = %1%") %filename;
-    if (is_in_storage(filename)) {
-        tcp_socket tcp_sock;
+    BOOST_LOG_TRIVIAL(info) << format("Starting file request, filename = %1%") % filename;
+    tcp_socket tcp_sock;
 
-        try {
-            tcp_sock.create_socket();
-            tcp_sock.bind();
-            tcp_sock.listen();
+    try {
+        tcp_sock.create_socket();
+        tcp_sock.bind();
+        tcp_sock.listen();
 
-            uint64_t tmp = htobe64(message_seq);
-            cout << tmp << endl;
-            ComplexMessage message{tmp, cp::file_get_response, filename.c_str(), htobe64(be16toh(tcp_sock.get_port()))};
-            BOOST_LOG_TRIVIAL(trace) << format("message to be sent: %1%") %message;
-            send_socket.send(message, destination_address, filename.length());
-            BOOST_LOG_TRIVIAL(trace) << format("sent: %1%") %message;
+        ComplexMessage message{htobe64(message_seq), cp::file_get_response, filename.c_str(),
+                               htobe64(be16toh(tcp_sock.get_port()))};
+        BOOST_LOG_TRIVIAL(trace) << format("message to be sent: %1%") % message;
+        send_socket.send(message, destination_address, filename.length());
+        BOOST_LOG_TRIVIAL(trace) << format("sent: %1%") % message;
 
-            BOOST_LOG_TRIVIAL(info) << format("TCP port info sent, port chosen = %1%") %be16toh(tcp_sock.get_port());
-        } catch(const socket_failure& e) {
-            msgerr(e.what());
-            return;
-        }
-
-        send_file_via_tcp(tcp_sock, filename);
-    } else {
-        cout << "Incorrect file request received" << endl; // TODO co wypisywać?
+        BOOST_LOG_TRIVIAL(info) << format("TCP port info sent, port chosen = %1%") % be16toh(tcp_sock.get_port());
+    } catch (const socket_failure &e) {
+        BOOST_LOG_TRIVIAL(error) << e.what();
+        return;
     }
-    BOOST_LOG_TRIVIAL(info)  << format("Handled file request, filename = %1%") %filename;
+
+    send_file_via_tcp(tcp_sock, filename);
+    BOOST_LOG_TRIVIAL(info) << format("Handled file request, filename = %1%") % filename;
 }
 
 void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
@@ -282,7 +217,7 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
     try {
         select_res = tcp_sock.select(this->timeout);
     } catch(const socket_failure& e) {
-        msgerr(e.what());
+        BOOST_LOG_TRIVIAL(error) << e.what();
         return;
     }
 
@@ -294,7 +229,7 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
             sock = tcp_sock.accept();
             sock.get_port();
         } catch(const socket_failure &e) {
-            msgerr(e.what());
+            BOOST_LOG_TRIVIAL(error) << e.what();
             return;
         }
 
@@ -310,7 +245,7 @@ void Server::send_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
                 try {
                     sock.write(buffer, length);
                 } catch(const socket_failure &e) {
-                    msgerr(e.what());
+                    BOOST_LOG_TRIVIAL(error) << e.what();
                     return;
                 }
             }
@@ -352,7 +287,7 @@ void Server::handle_upload_request(struct sockaddr_in destination_address, uint6
             send_socket.send(message, destination_address); // Send info about tcp port
         } catch(const socket_failure& e) {
             // TODO free file space, remove from list etc - uzyć RAII
-            msgerr(e.what());
+            BOOST_LOG_TRIVIAL(error) << e.what();
             return;
         }
 
@@ -361,8 +296,9 @@ void Server::handle_upload_request(struct sockaddr_in destination_address, uint6
 
     if (!can_upload) {
         BOOST_LOG_TRIVIAL(info) << format("Rejecting file upload request, filename = %1%, filesize = %2%, %3%") %filename %file_size %rejection_reason;
-        SimpleMessage message{htobe64(message_seq), cp::file_add_refusal};
-        send_socket.send(message, destination_address);
+        SimpleMessage message {htobe64(message_seq), cp::file_add_refusal, filename.c_str()};
+        send_socket.send(message, destination_address, filename.length());
+        BOOST_LOG_TRIVIAL(info) << format("Message sent %1%") %message;
     }
     BOOST_LOG_TRIVIAL(info) << format("Handled file upload request, filename = %1%, filesize = %2%") %filename %file_size;
 }
@@ -375,7 +311,7 @@ void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
     try {
         select_res = tcp_sock.select(this->timeout);
     } catch(const socket_failure& e) {
-        msgerr(e.what());
+        BOOST_LOG_TRIVIAL(error) << e.what();
         return;
     }
 
@@ -386,7 +322,7 @@ void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
         try {
             sock = tcp_sock.accept();
         } catch(const socket_failure &e) {
-            msgerr(e.what());
+            BOOST_LOG_TRIVIAL(error) << e.what();
             return;
         }
 
@@ -401,7 +337,7 @@ void Server::upload_file_via_tcp(tcp_socket& tcp_sock, const string& filename) {
                     fstream.write(buffer, read_len);
                 }
             } catch(const socket_failure& e) {
-                msgerr(e.what());
+                BOOST_LOG_TRIVIAL(error) << e.what();
                 return;
             }
         } else {
@@ -475,29 +411,9 @@ static void message_validation(const ComplexMessage& message, ssize_t message_le
     }
 }
 
-///******************************************************** RUN *********************************************************/
-//
-///**
-// *
-// * @return (message received, length of received message in bytes, source address)
-// */
-// // TODO być może timeout... i sprawdzanie czy serveer is running...
-//tuple<ComplexMessage, ssize_t, struct sockaddr_in> Server::receive_next_message() {
-//    ComplexMessage message;
-//    ssize_t recv_len;
-//    struct sockaddr_in source_address{};
-//    socklen_t addrlen = sizeof(struct sockaddr_in);
-//
-//    recv_len = recvfrom_complex(recv_socket, &message, sizeof(message), 0, (struct sockaddr*) &source_address, &addrlen);
-//    if (!server_running)
-//        throw
-//    if (recv_len < 0)
-//        msgerr("read");
-//
-//    return {message, recv_len, source_address};
-//}
 
-/******************************************************** EXIT *********************************************************/
+
+/******************************************************** EXIT ********************************************************/
 
 
 /******************************************************** RUN *********************************************************/
@@ -506,7 +422,7 @@ Server::Server(string mcast_addr, in_port_t cmd_port, uint64_t max_available_spa
     : multicast_address(std::move(mcast_addr)),
     cmd_port(cmd_port),
     max_available_space(max_available_space),
-    shared_folder(move(shared_folder_path)),
+    shared_folder(*shared_folder_path.rend() == '/' ?  move(shared_folder_path) :  move(shared_folder_path) + "/"),
     timeout(timeout)
     {}
 
@@ -517,6 +433,8 @@ Server::Server(const ServerConfiguration& server_configuration)
 
 void Server::init() {
     BOOST_LOG_TRIVIAL(trace) << "Starting server initialization...";
+    fs::create_directories(shared_folder);
+    signal(SIGPIPE, SIG_IGN);
     generate_files_in_storage();
     init_sockets();
     BOOST_LOG_TRIVIAL(trace) << "Server initialization ended";
@@ -541,16 +459,16 @@ void Server::run() {
                 BOOST_LOG_TRIVIAL(info) << "Closing server, run returning...\n";
                 return;
             } else {
-                msgerr(e.what()); // Keep working!
+                BOOST_LOG_TRIVIAL(error) << e.what();
                 continue;
             }
         }
 
+        source_ip = inet_ntoa(source_address.sin_addr);
+        source_port = be16toh(source_address.sin_port);
         try {
             message_validation(message_complex, message_length);
         } catch(const invalid_message& e) {
-            source_ip = inet_ntoa(source_address.sin_addr);
-            source_port = be16toh(source_address.sin_port);
             cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what() << endl;
             BOOST_LOG_TRIVIAL(info) << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port %e.what();
             continue;
@@ -558,12 +476,8 @@ void Server::run() {
 
         if (message_complex.command == cp::file_add_request) {
             BOOST_LOG_TRIVIAL(info) << "Message received: " << message_complex;
-//            try {
                 handler(&Server::handle_upload_request, this, std::ref(source_address),
                         be64toh(message_complex.message_seq), message_complex.data, be64toh(message_complex.param));
-//            } catch (const std::system_error& e) {
-//                cerr << format("%1%\n") %e.what();
-//            }
         } else {
             auto message_simple = (SimpleMessage*) &message_complex;
             BOOST_LOG_TRIVIAL(info) << "Message received: " << *message_simple;
@@ -573,10 +487,13 @@ void Server::run() {
             } else if (message_simple->command == cp::files_list_request) {
                 handler(&Server::handle_files_list_request, this, source_address,
                         be64toh(message_simple->message_seq), message_simple->data);
-                running_threads
             } else if (message_simple->command == cp::file_get_request) {
-                handler(&Server::handle_file_request, this, source_address,
-                        be64toh(message_simple->message_seq), message_simple->data);
+                if (is_in_storage(message_simple->data)) {
+                    handler(&Server::handle_file_request, this, source_address,
+                            be64toh(message_simple->message_seq), message_simple->data);
+                } else {
+                    cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") %source_ip %source_port << endl;
+                }
             } else if (message_simple->command == cp::file_remove_request) {
                 handle_remove_request(message_simple->data);
             }
@@ -584,14 +501,14 @@ void Server::run() {
     }
 }
 
-void Server::stop() {
-    server_running = false;
-    recv_socket.close();
-}
-
-bool Server::stopped() {
-    return running_threads == 0;
-}
+//void Server::stop() {
+//    server_running = false;
+//    recv_socket.close();
+//}
+//
+//bool Server::stopped() {
+//    return running_threads == 0;
+//}
 
 
 ostream& operator << (ostream &out, const Server &server) {
@@ -604,3 +521,6 @@ ostream& operator << (ostream &out, const Server &server) {
 
     return out;
 }
+
+
+// TODO CREATE SHAERED FOLDER if doesnt exists

@@ -26,24 +26,25 @@ Server& get_server(ServerConfiguration* server_config = nullptr) {
     static Server server {*server_config};
     return server;
 }
-
-static void exit_procedure(int sig) {
-    cout << "Wciśnięto CTRL+C" << endl;
-    get_server().stop();
-    std::mutex exit_mutex{};
-    std::condition_variable running_threads_cv;
-
-    std::unique_lock<std::mutex> lock(exit_mutex);
-    running_threads_cv.wait(lock, [] {
-        return get_server().stopped();
-    });
-    cout << "No more threads!" << endl;
-    //exit(0); // TODO raczej to server powinien się wyłączyć...
-}
+//
+//static void exit_procedure(int sig) {
+//    cout << "Wciśnięto CTRL+C" << endl;
+//    get_server().stop();
+//    exit(0); // TODO raczej to server powinien się wyłączyć...
+//    std::mutex exit_mutex{};
+//    std::condition_variable running_threads_cv;
+//
+//    std::unique_lock<std::mutex> lock(exit_mutex);
+//    running_threads_cv.wait(lock, [] {
+//        return get_server().stopped();
+//    });
+//    cout << "No more threads!" << endl;
+//    exit(0); // TODO raczej to server powinien się wyłączyć...
+//}
 
 
 void init() {
-    std::signal(SIGINT, exit_procedure);
+//    std::signal(SIGINT, exit_procedure);
     logging::register_simple_formatter_factory<logging::trivial::severity_level, char>("Severity");
     logging::add_file_log
             (
@@ -57,6 +58,9 @@ void init() {
 
     //  logging::core::get()->set_logging_enabled(false);
 }
+// TODO port validation / mcast address validation
+// TODO wczytać port do int32_t i sprawdzić czy > 0
+// 1
 
 ServerConfiguration parse_program_arguments(int argc, const char* argv[]) {
     ServerConfiguration server_configuration;
@@ -116,3 +120,5 @@ int main(int argc, const char* argv[]) {
 
     return 0;
 }
+
+// sudo apt install rlwrap

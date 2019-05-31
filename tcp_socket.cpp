@@ -66,7 +66,7 @@ void tcp_socket::listen() {
         throw socket_failure("listen");
 }
 
-int tcp_socket::select(__time_t seconds, __suseconds_t microseconds) {
+int tcp_socket::select(uint64_t seconds, uint64_t microseconds) {
     fd_set set;
     struct timeval timeval{};
     timeval.tv_sec = seconds;

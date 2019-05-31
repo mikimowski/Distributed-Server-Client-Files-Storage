@@ -2,26 +2,30 @@
 #define DISTRIBUTED_FILES_STORAGE_HELPER_H
 
 #include <utility>
-#include <thread>
 
-#define MAX_BUFFER_SIZE 50
+#define MAX_BUFFER_SIZE 50000
 
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htobe16(x) OSSwapHostToBigInt16(x)
+#define htole16(x) OSSwapHostToLittleInt16(x)
+#define be16toh(x) OSSwapBigToHostInt16(x)
+#define le16toh(x) OSSwapLittleToHostInt16(x)
+#define htobe32(x) OSSwapHostToBigInt32(x)
+#define htole32(x) OSSwapHostToLittleInt32(x)
+#define be32toh(x) OSSwapBigToHostInt32(x)
+#define le32toh(x) OSSwapLittleToHostInt32(x)
+#define htobe64(x) OSSwapHostToBigInt64(x)
+#define htole64(x) OSSwapHostToLittleInt64(x)
+#define be64toh(x) OSSwapBigToHostInt64(x)
+#define le64toh(x) OSSwapLittleToHostInt64(x)
+#endif	/* __APPLE__ */
 
-/**
- * Checks whether given string is filled with '\0' from starting index included to the end index excluded
- * str[start; end)
- * @param str
- * @param start
- * @param end
- * @return
- */
-bool is_empty(const char* str, size_t start, size_t end);
 
 /// Must be ended with '\0'
 bool is_valid_string(const char* str, uint64_t max_len);
 
 bool is_valid_data(const char* data, uint64_t length);
-
 
 /**
  * @return True if given pattern is a substring of given string,
@@ -30,10 +34,6 @@ bool is_valid_data(const char* data, uint64_t length);
 bool is_substring(const std::string &pattern, const std::string &str);
 
 void display_log_separator();
-
-size_t get_file_size(const std::string &file);
-
-void set_socket_timeout(int socket, uint16_t microseconds = 1000);
 
 class invalid_message : public std::exception {
     const std::string message;

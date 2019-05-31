@@ -6,6 +6,8 @@
 #include <netinet/in.h>
 #include <tuple>
 #include <condition_variable>
+#include <thread>
+#include <atomic>
 
 #include "server_configuration.h"
 #include "communication_protocol.h"
@@ -25,9 +27,7 @@ class Server {
     std::set<std::string> files_in_storage;
 
     /*** WORKFLOW ***/
-    std::atomic<int> running_threads = 0;
     std::atomic<bool> server_running = false;
-
 
     /*** Receiving ***/
     udp_socket recv_socket;
@@ -70,7 +70,6 @@ class Server {
     template<typename... A>
     void handler(A &&... args) {
         std::thread handler{std::forward<A>(args)...};
-        running_threads++;
         handler.detach();
     }
 
@@ -90,16 +89,10 @@ class Server {
 
     /**************************************************** UPLOAD ******************************************************/
 
-    /* TODO file_size = 0?
-     *
-     *
-     * */
     void handle_upload_request(struct sockaddr_in destination_address, uint64_t message_seq,
                                std::string filename, uint64_t file_size);
 
-    // TODO error handling
     void upload_file_via_tcp(tcp_socket& tcp_sock, const std::string &filename);
-
 
     /**************************************************** REMOVE ******************************************************/
 
@@ -107,14 +100,8 @@ class Server {
 
     /****************************************************** RUN *******************************************************/
 
-    /**
-     * @return (message received, length of received message in bytes, source address)
-     */
-    std::tuple<ComplexMessage, ssize_t, struct sockaddr_in> receive_next_message();
-
 public:
-    Server(std::string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, std::string shared_folder_path,
-           uint16_t timeout);
+    Server(std::string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, std::string shared_folder_path, uint16_t timeout);
 
     Server(const ServerConfiguration &server_configuration);
 

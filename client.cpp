@@ -30,68 +30,7 @@ namespace cp = communication_protocol;
 namespace fs = boost::filesystem;
 namespace logging = boost::log;
 
-//#ifdef __APPLE__
-//#include <libkern/OSByteOrder.h>
-//#define htobe16(x) OSSwapHostToBigInt16(x)
-//#define htole16(x) OSSwapHostToLittleInt16(x)
-//#define be16toh(x) OSSwapBigToHostInt16(x)
-//#define le16toh(x) OSSwapLittleToHostInt16(x)
-//#define htobe32(x) OSSwapHostToBigInt32(x)
-//#define htole32(x) OSSwapHostToLittleInt32(x)
-//#define be32toh(x) OSSwapBigToHostInt32(x)
-//#define le32toh(x) OSSwapLittleToHostInt32(x)
-//#define htobe64(x) OSSwapHostToBigInt64(x)
-//#define htole64(x) OSSwapHostToLittleInt64(x)
-//#define be64toh(x) OSSwapBigToHostInt64(x)
-//#define le64toh(x) OSSwapLittleToHostInt64(x)
-//#endif	/* __APPLE__ */
 
-
-
-
-static int create_multicast_udp_socket() {
-    int mcast_udp_socket, optval;
-
-    if ((mcast_udp_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-        syserr("socket");
-
-    /* uaktywnienie rozgłaszania (ang. broadcast) */
-    optval = 1;
-    if (setsockopt(mcast_udp_socket, SOL_SOCKET, SO_BROADCAST, (void*)&optval, sizeof optval) < 0)
-        syserr("setsockopt broadcast");
-
-    /* ustawienie TTL dla datagramów rozsyłanych do grupy */
-    optval = 5;
-    if (setsockopt(mcast_udp_socket, IPPROTO_IP, IP_MULTICAST_TTL, (void*)&optval, sizeof optval) < 0)
-        syserr("setsockopt multicast ttl");
-
-    return mcast_udp_socket;
-}
-
-static int create_unicast_udp_socket() {
-    int unicast_socket;
-    if ((unicast_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-        syserr("socket");
-    return unicast_socket;
-}
-
-static int create_and_connect_tcp_socket(const char* destination_ip, uint16_t destination_port) {
-    int tcp_socket;
-    struct sockaddr_in destination_address{};
-    memset(&destination_address, 0, sizeof(destination_address));
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htobe16(destination_port);
-    if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
-        syserr("inet_aton");
-    if ((tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-        syserr("socket");
-    if (connect(tcp_socket, (struct sockaddr*) &destination_address, sizeof(destination_address)) < 0)
-        syserr("connect");
-
-    return tcp_socket;
-}
-
-// TODO jakoś lepiej...
 static bool is_expected_command(const char* command, const string& expected_command) {
     int i = 0;
     for (; i < expected_command.length(); i++)
@@ -110,7 +49,7 @@ static void message_validation(const ComplexMessage& message, uint64_t expected_
         throw invalid_message("invalid command");
     if (be64toh(message.message_seq) != expected_message_seq)
         throw invalid_message("invalid message seq");
-    if (!is_valid_data(message.data, message_size - cp::complex_message_no_data_size)) //  TODO is it right? check!
+    if (!is_valid_data(message.data, message_size - cp::complex_message_no_data_size))
         throw invalid_message("invalid message data");
 }
 
@@ -121,13 +60,12 @@ static void message_validation(const SimpleMessage& message, uint64_t expected_m
         throw invalid_message("invalid command");
     if (be64toh(message.message_seq) != expected_message_seq)
         throw invalid_message("invalid message seq");
-    if (!is_valid_data(message.data, message_size - cp::simple_message_no_data_size)) //  TODO is it right? check!
+    if (!is_valid_data(message.data, message_size - cp::simple_message_no_data_size))
         throw invalid_message("invalid message data");
     if (!expected_data.empty() && expected_data != message.data)
         throw invalid_message("unexpected data received");
 }
 
-// TODO throw expection if failed... ?? no way of failure...
 static tuple<string, in_port_t> unpack_sockaddr(const struct sockaddr_in& address) {
     return {inet_ntoa(address.sin_addr), be16toh(address.sin_port)};
 }
@@ -136,67 +74,11 @@ uint64_t Client::generate_message_sequence() {
     return uniform_distribution(generator);
 }
 
-void Client::send_message_multicast_udp(int sock, const SimpleMessage &message, uint16_t data_length) {
-    uint16_t message_length = cp::simple_message_no_data_size + data_length;
-    struct sockaddr_in destination_address{};
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htons(cmd_port);
-    if (inet_aton(mcast_addr.c_str(), &destination_address.sin_addr) == 0)
-        syserr("inet_aton");
-    if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        syserr("sendto");
-
-    BOOST_LOG_TRIVIAL(info) << "multicast udp message sent";
-}
-
-void Client::send_message_multicast_udp(int sock, const ComplexMessage &message, uint16_t data_length) {
-    uint16_t message_length = cp::complex_message_no_data_size + data_length;
-    struct sockaddr_in destination_address{};
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htons(cmd_port);
-    if (inet_aton(mcast_addr.c_str(), &destination_address.sin_addr) == 0)
-        syserr("inet_aton");
-    if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        syserr("sendto");
-
-    BOOST_LOG_TRIVIAL(info) << "multicast udp message sent";
-}
-
-void Client::send_message_unicast_udp(int sock, const char* destination_ip, const ComplexMessage &message, uint16_t data_length) {
-    uint16_t message_length = cp::complex_message_no_data_size + data_length;
-    struct sockaddr_in destination_address{};
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htons(cmd_port);
-    if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
-        syserr("inet_aton");
-    if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        syserr("sendto");
-
-    BOOST_LOG_TRIVIAL(info) << "unicast udp message sent";
-}
-
-void Client::send_message_unicast_udp(int sock, const char* destination_ip, const SimpleMessage &message, uint16_t data_length) {
-    uint16_t message_length = cp::simple_message_no_data_size + data_length;
-    struct sockaddr_in destination_address{};
-    destination_address.sin_family = AF_INET;
-    destination_address.sin_port = htons(cmd_port);
-    if (inet_aton(destination_ip, &destination_address.sin_addr) == 0)
-        syserr("inet_aton");
-    if (sendto(sock, &message, message_length, 0, (struct sockaddr*) &destination_address, sizeof(destination_address)) != message_length)
-        syserr("sendto");
-
-    BOOST_LOG_TRIVIAL(info) << "unicast udp message sent";
-}
-
-
-
 /***************************************************** DISCOVER *******************************************************/
 
 static void display_server_discovered_info(const char* server_ip, const char* server_mcast_addr, uint64_t server_space) {
     cout << format("Found %1%(%2%) with free space %3%") %server_ip %server_mcast_addr %server_space << endl;
 }
-
-
 
 /**
  * @param udp_socket
@@ -235,7 +117,6 @@ void Client::receive_discover_response(udp_socket& sock, uint64_t expected_messa
     }
 }
 
-// Main thread
 void Client::discover() {
     BOOST_LOG_TRIVIAL(trace) << "Starting discover...";
     uint64_t expected_message_seq = send_discover_message(multicast_sock);
@@ -270,9 +151,8 @@ multiset<Client::ServerData, std::greater<>> Client::silent_discover_receive(udp
     return servers;
 }
 
-// Arbitrary thread
 multiset<Client::ServerData, std::greater<>> Client::silent_discover() {
-    udp_socket sock; // Needs custom socket
+    udp_socket sock;
     sock.create_multicast_socket();
     uint64_t expected_message_seq = send_discover_message(sock);
     auto servers = silent_discover_receive(sock, expected_message_seq);
@@ -281,12 +161,12 @@ multiset<Client::ServerData, std::greater<>> Client::silent_discover() {
 
 /************************************************** GET FILES LIST ****************************************************/
 
-void Client::display_and_update_files_list(char* data, const char* server_ip) {
-    char* filename = strtok(data, "\n");
-    while (filename != nullptr) {
-        cout << filename << " (" << server_ip << ")" << endl;
-        this->last_search_results[filename] = server_ip;
-        filename = strtok(nullptr, "\n");
+void Client::display_and_update_files_list(char* data, const string& server_ip) {
+    std::vector<string> files;
+    boost::split(files, data, boost::is_any_of("\n"));
+    for (const string& file : files) {
+        cout << format("%1% (%2%)") %file %server_ip << endl;
+        this->last_search_results[file] = server_ip;
     }
 }
 
@@ -315,7 +195,6 @@ void Client::receive_search_respond(uint64_t expected_message_seq) {
     }
 }
 
-// Main thread
 void Client::search(string pattern) {
     BOOST_LOG_TRIVIAL(info) << format("Starting search, pattern=%1%...") %pattern;
     uint64_t message_seq = generate_message_sequence();
@@ -327,7 +206,6 @@ void Client::search(string pattern) {
 
 /**************************************************** FETCH FILE ******************************************************/
 
-// TODO jakiś fałszywy server mógłby się podszyć... trzeba srpawdzić czy otrzymano faktycznie od tego...
 // TODO co jak timeout?!
 /***
  *
@@ -352,7 +230,7 @@ in_port_t Client::receive_fetch_file_response(udp_socket& sock, uint64_t expecte
 
         auto [source_ip, source_port] = unpack_sockaddr(source_address);
         try {
-            BOOST_LOG_TRIVIAL(info) << format("received: %1% from %2%%3%") %message %source_ip %source_port;
+            BOOST_LOG_TRIVIAL(info) << format("received: %1% from %2%:%3%") %message %source_ip %source_port;
             message_validation(message, expected_message_seq, cp::file_get_response, message_length, expected_filename);
             BOOST_LOG_TRIVIAL(info)
                 << format("fetch file valid response received: port=%1% filename=%2%, source=%3%:%4%")
@@ -432,9 +310,9 @@ void Client::fetch(string filename, const string& server_ip) {
 
 /*************************************************** UPLOAD FILE ******************************************************/
 
-tuple<in_port_t, bool> Client::can_upload_file(udp_socket& sock, const string& server_ip, const string& filename) {
+tuple<in_port_t, bool> Client::can_upload_file(udp_socket& sock, const string& server_ip, const string& filename, ssize_t file_size) {
     uint64_t message_sequence = generate_message_sequence();
-    ComplexMessage message{htobe64(message_sequence), cp::file_add_request, filename.c_str(), htobe64(get_file_size(this->out_folder + filename))};
+    ComplexMessage message{htobe64(message_sequence), cp::file_add_request, filename.c_str(), htobe64(file_size)};
     sock.send(message, server_ip, htobe16(cmd_port), filename.length());
     return receive_upload_file_response(sock, message_sequence, filename);
 }
@@ -460,13 +338,12 @@ tuple<in_port_t, bool> Client::receive_upload_file_response(udp_socket& sock, ui
                 return {be64toh(message.param), true}; // connect_me
             } else {
                 auto message_simple = (SimpleMessage *) &message;
-                message_validation(*message_simple, expected_message_sequence, cp::file_add_refusal, message_length,
-                                   expected_filename);
+                message_validation(*message_simple, expected_message_sequence, cp::file_add_refusal, message_length, expected_filename);
                 return {be64toh(message.param), false}; // no_way
             }
         } catch (const invalid_message &e) {
             auto[source_ip, source_port] = unpack_sockaddr(source_address);
-            cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%.") % source_ip % source_port;
+            cerr << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") % source_ip % source_port %e.what();
             BOOST_LOG_TRIVIAL(error)
                 << format("[PCKG ERROR] Skipping invalid package from %1%:%2%. %3%") % source_ip %
                    source_port % e.what();
@@ -480,8 +357,6 @@ tuple<in_port_t, bool> Client::receive_upload_file_response(udp_socket& sock, ui
 // TODO error handling...
 void Client::upload_file_via_tcp(const char* server_ip, in_port_t server_port, const fs::path& file_path) {
     BOOST_LOG_TRIVIAL(trace) << format("Uploading file via tcp, port:%1%, file = %2%") %server_port %file_path;
-    //int tcp_socket = create_and_connect_tcp_socket(server_ip, server_port);
-
     tcp_socket sock;
     try {
         sock.create_socket();
@@ -496,7 +371,7 @@ void Client::upload_file_via_tcp(const char* server_ip, in_port_t server_port, c
         char buffer[MAX_BUFFER_SIZE];
         while (file_stream) {
             file_stream.read(buffer, MAX_BUFFER_SIZE);
-            ssize_t length = file_stream.gcount();
+            ssize_t length = file_stream.gcount(); // TODO what for?
 
             try {
                 sock.write(buffer, sizeof(buffer));
@@ -531,9 +406,9 @@ bool Client::at_least_on_server_has_space(const multiset<Client::ServerData, std
  * TODO:
  * 1. Validate file ~ exists?
  */
-void Client::upload(fs::path file_path) { // copy because it's another thread!
+void Client::upload(fs::path file_path) {
     BOOST_LOG_TRIVIAL(trace) << format("Starting upload procedure, file = %1%") %file_path;
-
+    sleep(5);
     if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) {
         cout << format("File %1% does not exist") %file_path << endl;
         BOOST_LOG_TRIVIAL(trace) << format("Invalid file, file_path = %1%") %file_path;
@@ -551,7 +426,7 @@ void Client::upload(fs::path file_path) { // copy because it's another thread!
             }
 
             for (const auto &server : servers) {
-                auto [port, is_approval] = can_upload_file(sock, server.ip_addr, filename);
+                auto [port, is_approval] = can_upload_file(sock, server.ip_addr, filename, fs::file_size(file_path));
                 if (is_approval) {
                     upload_file_via_tcp(server.ip_addr, port, file_path);
                     return;
@@ -567,17 +442,14 @@ void Client::upload(fs::path file_path) { // copy because it's another thread!
 void Client::remove(string filename) {
     BOOST_LOG_TRIVIAL(trace) << "Starting remove file";
     SimpleMessage message {htobe64(generate_message_sequence()), cp::file_remove_request, filename.c_str()};
-    int udp_socket = create_multicast_udp_socket(); // TODO i tu ładny try catch na tworzenie ;)
-    send_message_multicast_udp(udp_socket, message, filename.length());
-    if (close(udp_socket))
-        syserr("close");
-    BOOST_LOG_TRIVIAL(trace) << "Ending remove file";
-}
-
-/***************************************************** EXIT *******************************************************/
-void exit() {
-    BOOST_LOG_TRIVIAL(trace) << "Exit";
-    std::exit(0);
+    try {
+        udp_socket sock;
+        sock.create_multicast_socket();
+        sock.send(message, mcast_addr, htobe16(cmd_port), filename.length());
+        BOOST_LOG_TRIVIAL(trace) << "Ending remove file";
+    } catch (const socket_failure& e) {
+        msgerr(e.what());
+    }
 }
 
 /**************************************************** PUBLIC **********************************************************/
@@ -585,7 +457,7 @@ void exit() {
 Client::Client(string mcast_addr, uint16_t cmd_port, string folder, const uint16_t timeout)
     : mcast_addr(std::move(mcast_addr)),
     cmd_port(cmd_port),
-    out_folder(std::move(folder)),
+    out_folder(*folder.rend() == '/' ? std::move(folder) : std::move(folder) + "/"),
     timeout(timeout),
     generator(std::random_device{}())
     {}
@@ -593,8 +465,6 @@ Client::Client(string mcast_addr, uint16_t cmd_port, string folder, const uint16
 Client::Client(ClientConfiguration& configuration)
     : Client(configuration.mcast_addr.c_str(), configuration.cmd_port, configuration.out_folder, configuration.timeout)
     {}
-
-
 
 static bool is_param_required(const string& command) {
     std::set<string> s = {"fetch", "upload", "remove"};
@@ -673,6 +543,7 @@ void Client::run() {
 }
 
 void Client::init() {
+    fs::create_directories(out_folder);
     multicast_sock.create_multicast_socket();
 }
 

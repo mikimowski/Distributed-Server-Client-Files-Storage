@@ -21,7 +21,7 @@ public:
 
     void set_reuse_address();
 
-    void set_timeout(__time_t seconds, __suseconds_t microseconds);
+    void set_timeout(uint64_t seconds, uint64_t microseconds);
 
     /** @return port in big endian */
     int get_port();

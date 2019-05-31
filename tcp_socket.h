@@ -16,7 +16,7 @@ public:
 
     void connect(const std::string& destination_ip, in_port_t destination_port);
     void listen();
-    int select(__time_t seconds, __suseconds_t microseconds = 0);
+    int select(uint64_t seconds, uint64_t microseconds = 0);
     tcp_socket accept();
     void write(char buffer[], ssize_t length);
     ssize_t read(char buffer[], ssize_t length);

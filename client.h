@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <thread>
+#include <atomic>
 
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
@@ -126,7 +127,7 @@ class Client {
 
     /************************************************ GET FILES LIST **************************************************/
 
-    void display_and_update_files_list(char* data, const char* server_ip);
+    void display_and_update_files_list(char* data, const std::string& server_ip);
 
     uint64_t send_get_files_list_message(const std::string& pattern);
 
@@ -146,7 +147,7 @@ class Client {
 
     /************************************************* UPLOAD FILE ****************************************************/
 
-    std::tuple<in_port_t, bool> can_upload_file(udp_socket& sock, const std::string&  server_ip, const std::string& filename);
+    std::tuple<in_port_t, bool> can_upload_file(udp_socket& sock, const std::string&  server_ip, const std::string& filename, ssize_t file_size);
 
     // TODO wredny server fałszyyw moze wyslac wszystko dobrze ale nie być tym serverem...
     std::tuple<in_port_t, bool> receive_upload_file_response(udp_socket& sock, uint64_t expected_message_sequence, const std::string& expected_filename);
@@ -178,18 +179,18 @@ class Client {
     void exit();
 
 public:
-//    template<typename T>
-//    void set_socket_timeout2(int sock, const std::chrono::time_point<T>& start_time, uint64_t timeout) { // TODO set timeout...
-//        auto curr_time = std::chrono::high_resolution_clock::now();
-//        auto microseconds_passed = std::chrono::duration_cast<std::chrono::microseconds>(curr_time - start_time).count();
-//        auto seconds_passed = std::chrono::duration_cast<std::chrono::seconds>(curr_time - start_time).count();
-//
-//        struct timeval timeval{};
-//        if (microseconds_passed != 0)
-//            seconds_passed++;
-//        timeval.tv_sec = timeout - (microseconds_passed / 1e6 + 1);
-//        timeval.tv_usec = 1e6 - (microseconds_passed % 1e6);
-//    }
+    template<typename T>
+    void set_socket_timeout2(int sock, const std::chrono::time_point<T>& start_time, uint64_t timeout) { // TODO set timeout...
+        auto curr_time = std::chrono::high_resolution_clock::now();
+        auto microseconds_passed = std::chrono::duration_cast<std::chrono::microseconds>(curr_time - start_time).count();
+        auto seconds_passed = std::chrono::duration_cast<std::chrono::seconds>(curr_time - start_time).count();
+
+        struct timeval timeval{};
+        if (microseconds_passed != 0)
+            seconds_passed++;
+        timeval.tv_sec = timeout - (microseconds_passed / 1e6 + 1);
+        timeval.tv_usec = 1e6 - (microseconds_passed % 1e6);
+    }
 //
 //    void tmp() {
 //        auto start_time = std::chrono::high_resolution_clock::now();
