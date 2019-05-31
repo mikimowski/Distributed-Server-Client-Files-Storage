@@ -101,6 +101,13 @@ class Client {
         return elapsed_time.count() / 1000 >= timeout;
     }
 
+    template<typename... A>
+    void handler(A &&... args) {
+        std::thread handler{std::forward<A>(args)...};
+        running_threads++;
+        handler.detach();
+    }
+
     /*************************************************** DISCOVER *****************************************************/
 
     /**
