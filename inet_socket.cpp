@@ -6,10 +6,11 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <cstring>
 #include <netdb.h>
 
 #include "inet_socket.h"
-#include "err.h"
+#include "logger.h"
 
 namespace cp = communication_protocol;
 
@@ -17,7 +18,7 @@ namespace cp = communication_protocol;
 inet_socket::~inet_socket() {
     if (!closed) {
         if (::close(sock) < 0)
-            msgerr("socket closing failure");
+            logger::syserr("close");
     }
 }
 
@@ -43,11 +44,7 @@ void inet_socket::bind() {
     port = local_addr.sin_port;
 }
 
-void inet_socket::set_timeout(uint64_t seconds, uint64_t microseconds) {
-    struct timeval timeval{};
-    timeval.tv_sec = seconds;
-    timeval.tv_usec = microseconds;
-
+void inet_socket::set_timeout(struct timeval timeval) {
     if (::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (void *) &timeval, sizeof(timeval)) < 0)
         throw socket_failure("setsockopt 'SO_RCVTIMEO'");
 }
@@ -55,13 +52,7 @@ void inet_socket::set_timeout(uint64_t seconds, uint64_t microseconds) {
 void inet_socket::set_reuse_address() {
     int reuse = 1;
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
-        throw socket_failure("setsockopt 'SO_REUSEADDR' failed");
-}
-
-void inet_socket::close() {
-    if (::close(sock) < 0)
-        throw socket_failure("close");
-    closed = true;
+        throw socket_failure("setsockopt 'SO_REUSEADDR'");
 }
 
 int inet_socket::get_port() {
@@ -75,21 +66,6 @@ int inet_socket::get_sock() {
 bool inet_socket::is_closed() {
     return closed;
 }
-
-// *
-// * @return True if socket was successfully closed, false if it was already closed.
-// */
-//bool inet_socket::close()  {
-//    static std::mutex mutex;
-//    std::lock_guard<std::mutex> lock(mutex);
-//    if (closed)
-//        return false;
-//    if (close(socket) < 0)
-//        throw socket_failure("socket close");
-//    closed = true;
-//    return true;
-//}
-//
 
 socket_failure::socket_failure(std::string message)
     : message(std::move(message))

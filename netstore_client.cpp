@@ -3,14 +3,10 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
-#include <csignal>
 
 #include "client.h"
 
 using std::string;
-using std::cout;
-using std::endl;
-using std::cerr;
 
 namespace po = boost::program_options;
 namespace logging = boost::log;
@@ -19,16 +15,23 @@ namespace cc = client_configuration;
 
 ClientConfiguration parse_program_arguments(int argc, const char* argv[]) {
     ClientConfiguration client_configuration{};
+    int64_t timeout;
+    int32_t port;
 
     po::options_description description {"Program options"};
     description.add_options()
             ("help,h", "Help screen")
             ("MCAST_ADDR,g", po::value<string>(&client_configuration.mcast_addr)->required(), "Multicast address")
-            ("CMD_PORT,p", po::value<uint16_t>(&client_configuration.cmd_port)->required(), "UDP port on which servers are listening")
+            ("CMD_PORT,p", po::value<int32_t>(&port)->required()->notifier([](int32_t port) {
+                if (port <= 0 || port > UINT16_MAX) {
+                    std::cerr << "CMD_PORT out of range\n";
+                    exit(1);
+                }
+            }), "UDP port on which servers are listening")
             ("OUT_FLDR,o", po::value<string>(&client_configuration.out_folder)->required(), "Path to the directory in which files should be saved")
-            ("TIMEOUT,t", po::value<uint16_t>(&client_configuration.timeout)->default_value(cc::default_timeout)->notifier([](uint16_t timeout) {
+            ("TIMEOUT,t", po::value<int64_t>(&timeout)->default_value(cc::default_timeout)->notifier([](int64_t timeout) {
                  if (timeout > cc::max_timeout) {
-                     cerr << "TIMEOUT out of range\n";
+                     std::cerr << "TIMEOUT out of range" << std::endl;
                      exit(1);
                  }
              }),
@@ -41,14 +44,17 @@ ClientConfiguration parse_program_arguments(int argc, const char* argv[]) {
     try {
         po::store(po::parse_command_line(argc, argv, description), var_map);
         if (var_map.count("help")) {
-            cout << description << endl;
+            std::cout << description << std::endl;
             exit(0);
         }
         po::notify(var_map);
-    } catch (po::required_option &e) {
-        cerr << e.what() << endl;
+    } catch (std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        std::cout << description << std::endl;
         exit(1);
     }
+    client_configuration.cmd_port = port;
+    client_configuration.timeout = timeout;
 
     return client_configuration;
 }
@@ -64,16 +70,17 @@ void init() {
                     logging::keywords::auto_flush = true
             );
     logging::add_common_attributes();
+
+    //logging::core::get()->set_logging_enabled(false);
 }
 
 
 int main(int argc, const char* argv[]) {
     init();
-
     ClientConfiguration configuration = parse_program_arguments(argc, argv);
     Client client {configuration};
     client.init();
-    BOOST_LOG_TRIVIAL(trace) << client << endl;
+    BOOST_LOG_TRIVIAL(trace) << client << std::endl;
     client.run();
 
     return 0;

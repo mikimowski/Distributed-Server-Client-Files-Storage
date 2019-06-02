@@ -3,10 +3,8 @@
 
 #include <string>
 #include <set>
-#include <netinet/in.h>
 #include <tuple>
-#include <condition_variable>
-#include <thread>
+#include <mutex>
 #include <atomic>
 
 #include "server_configuration.h"
@@ -18,16 +16,13 @@ class Server {
     const std::string multicast_address = "";
     in_port_t cmd_port = -1;
     std::mutex used_space_mutex;
-    std::atomic<uint64_t> used_space = 0;
+    std::atomic<uint64_t> used_space = {0};
     const uint64_t max_available_space = 0;
     const std::string shared_folder = "";
     const uint16_t timeout = 0;
 
     std::mutex files_in_storage_mutex;
     std::set<std::string> files_in_storage;
-
-    /*** WORKFLOW ***/
-    std::atomic<bool> server_running = false;
 
     /*** Receiving ***/
     udp_socket recv_socket;
@@ -67,12 +62,6 @@ class Server {
 
     void try_send_message(const ComplexMessage& message, const struct sockaddr_in& destination_address, uint16_t length);
 
-    template<typename... A>
-    void handler(A &&... args) {
-        std::thread handler{std::forward<A>(args)...};
-        handler.detach();
-    }
-
     /*************************************************** DISCOVER *****************************************************/
 
     void handle_discover_request(const struct sockaddr_in &destination_address, uint64_t message_seq);
@@ -92,7 +81,7 @@ class Server {
     void handle_upload_request(struct sockaddr_in destination_address, uint64_t message_seq,
                                std::string filename, uint64_t file_size);
 
-    void upload_file_via_tcp(tcp_socket& tcp_sock, const std::string &filename);
+    void upload_file_via_tcp(tcp_socket& tcp_sock, const std::string &filename, uint64_t to_upload);
 
     /**************************************************** REMOVE ******************************************************/
 
@@ -100,22 +89,25 @@ class Server {
 
     /****************************************************** RUN *******************************************************/
 
+    /**
+     * Basic message validation:
+     * Assures that message's command is correct and data if required was attached. Doesn't validate data.
+     * 1. Checks whether received command is valid.
+     * 2. Checks whether message length is in acceptable range.
+     * @param message - message to be validated.
+     * @param message_length - length of given message (bytes read from socket).
+     */
+    static void message_validation(const ComplexMessage& message, ssize_t message_length);
 public:
     Server(std::string mcast_addr, in_port_t cmd_port, uint64_t max_available_space, std::string shared_folder_path, uint16_t timeout);
 
-    Server(const ServerConfiguration &server_configuration);
+    explicit Server(const ServerConfiguration &server_configuration);
 
     Server() = default;
 
     void init();
 
     void run();
-
-    void stop();
-
-    bool no_threads_running();
-
-    bool stopped();
 
     friend std::ostream &operator<<(std::ostream &out, const Server &server);
 };

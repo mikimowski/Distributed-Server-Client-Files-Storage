@@ -1,14 +1,10 @@
 #ifndef DISTRIBUTED_FILES_STORAGE_INET_SOCKET_H
 #define DISTRIBUTED_FILES_STORAGE_INET_SOCKET_H
 
-
 #include <cstdint>
 #include <string>
 #include "communication_protocol.h"
 
-#define TTL 5
-#define TCP_QUEUE_LENGTH 5
-// TODO make abstract
 class inet_socket {
 protected:
     int sock;
@@ -18,10 +14,13 @@ protected:
     void fake_close();
 
 public:
+    /* Closes socket */
+    virtual ~inet_socket();
 
     void set_reuse_address();
 
-    void set_timeout(uint64_t seconds, uint64_t microseconds);
+    /** Sets socket timeout according to given parameter */
+    void set_timeout(struct timeval timeval);
 
     /** @return port in big endian */
     int get_port();
@@ -32,11 +31,6 @@ public:
 
     /** Binds on random port **/
     void bind();
-
-    /* Can be closed manually, although it's better to use RAII...*/
-    void close();
-    /* Closes socket */
-    virtual ~inet_socket();
 };
 
 

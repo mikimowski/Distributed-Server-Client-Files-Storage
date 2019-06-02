@@ -15,7 +15,6 @@ tcp_socket::tcp_socket(tcp_socket &&rhs) noexcept {
     rhs.fake_close();
 }
 
-
 tcp_socket& tcp_socket::operator=(tcp_socket&& rhs) {
     if (this != &rhs) {
         sock = rhs.get_sock();
@@ -81,7 +80,6 @@ int tcp_socket::select(uint64_t seconds, uint64_t microseconds) {
     return rv;
 }
 
-
 tcp_socket tcp_socket::accept() {
     int fd;
     struct sockaddr_in source_address{};
@@ -104,6 +102,6 @@ void tcp_socket::write(char buffer[], ssize_t length) {
 ssize_t tcp_socket::read(char buffer[], ssize_t length) {
     ssize_t read_len;
     if ((read_len = ::read(sock, buffer, length)) < 0)
-        throw socket_failure("read");
+        throw socket_failure("vector");
     return read_len;
 }
