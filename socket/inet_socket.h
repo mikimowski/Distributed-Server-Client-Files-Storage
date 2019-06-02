@@ -3,7 +3,7 @@
 
 #include <cstdint>
 #include <string>
-#include "communication_protocol.h"
+#include "../communication_protocol.h"
 
 class inet_socket {
 protected:

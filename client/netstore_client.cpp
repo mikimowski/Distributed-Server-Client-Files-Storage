@@ -71,7 +71,7 @@ void init() {
             );
     logging::add_common_attributes();
 
-    //logging::core::get()->set_logging_enabled(false);
+    logging::core::get()->set_logging_enabled(false);
 }
 
 

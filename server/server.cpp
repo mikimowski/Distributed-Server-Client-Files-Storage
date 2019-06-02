@@ -18,8 +18,8 @@
 #include <bits/signum.h>
 
 #include "server.h"
-#include "helper.h"
-#include "logger.h"
+#include "../helper.h"
+#include "../logger.h"
 
 using std::string;
 using std::to_string;
@@ -415,7 +415,8 @@ Server::Server(const ServerConfiguration& server_configuration)
 
 void Server::init() {
     BOOST_LOG_TRIVIAL(trace) << "Starting server initialization...";
-    fs::create_directories(shared_folder);
+    if (shared_folder != "./" && shared_folder != "../")
+        fs::create_directories(shared_folder);
     signal(SIGPIPE, SIG_IGN);
     generate_files_in_storage();
     init_sockets();
@@ -465,6 +466,8 @@ void Server::run() {
                 if (is_in_storage(message_simple->data)) {
                     handler(&Server::handle_file_request, this, source_address,
                             be64toh(message_simple->message_seq), message_simple->data);
+                } else {
+                    logger::package_skipping(inet_ntoa(source_address.sin_addr), be16toh(source_address.sin_port), "no such file in storage");
                 }
             } else if (message_simple->command == cp::file_remove_request) {
                 handle_remove_request(message_simple->data);

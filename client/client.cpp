@@ -17,8 +17,8 @@
 #include <sys/socket.h>
 
 #include "client.h"
-#include "helper.h"
-#include "logger.h"
+#include "../helper.h"
+#include "../logger.h"
 
 using std::string;
 using std::vector;
@@ -392,7 +392,8 @@ Client::Client(ClientConfiguration& configuration)
 
 
 void Client::init() {
-    fs::create_directories(out_folder);
+    if (out_folder != "./" && out_folder != "../")
+        fs::create_directories(out_folder);
     multicast_sock.create_multicast_socket();
 }
 

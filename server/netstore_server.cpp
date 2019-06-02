@@ -5,6 +5,7 @@
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <netinet/in.h>
 
+#include "../logger.h"
 #include "server.h"
 
 namespace po = boost::program_options;
@@ -75,7 +76,7 @@ void init() {
             );
     logging::add_common_attributes();
 
-    //logging::core::get()->set_logging_enabled(false);
+    logging::core::get()->set_logging_enabled(false);
 }
 
 int main(int argc, const char* argv[]) {
@@ -89,7 +90,7 @@ int main(int argc, const char* argv[]) {
         BOOST_LOG_TRIVIAL(trace) << server << std::endl;
         server.run();
     } catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl;
+        logger::syserr(e.what());
         exit(1);
     }
 

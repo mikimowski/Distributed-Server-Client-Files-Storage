@@ -8,9 +8,9 @@
 #include <atomic>
 
 #include "server_configuration.h"
-#include "communication_protocol.h"
-#include "udp_socket.h"
-#include "tcp_socket.h"
+#include "../communication_protocol.h"
+#include "../socket/udp_socket.h"
+#include "../socket/tcp_socket.h"
 
 class Server {
     const std::string multicast_address = "";
