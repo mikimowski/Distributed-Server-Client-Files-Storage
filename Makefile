@@ -6,10 +6,10 @@ LFLAGS	= -lboost_system -lboost_program_options -lboost_filesystem -lboost_log_s
 
 all: netstore-client netstore-server
 
-netstore-server: server/netstore_server.cpp server/server.cpp socket/tcp_socket.cpp socket/udp_socket.cpp socket/inet_socket.cpp communication_protocol.cpp helper.cpp logger.cpp
+netstore-server: server/netstore_server.cpp server/server.cpp socket/tcp_socket.cpp socket/udp_socket.cpp socket/inet_socket.cpp protocol/communication_protocol.cpp utilities/helper.cpp utilities/logger.cpp
 	$(CC) $(CFLAGS) $^ $(LFLAGS) -o $@
 
-netstore-client: client/netstore_client.cpp client/client.cpp socket/tcp_socket.cpp socket/udp_socket.cpp socket/inet_socket.cpp communication_protocol.cpp helper.cpp logger.cpp
+netstore-client: client/netstore_client.cpp client/client.cpp socket/tcp_socket.cpp socket/udp_socket.cpp socket/inet_socket.cpp protocol/communication_protocol.cpp utilities/helper.cpp utilities/logger.cpp
 	$(CC) $(CFLAGS) $^ $(LFLAGS) -o $@
 
 .PHONY: clean TARGET

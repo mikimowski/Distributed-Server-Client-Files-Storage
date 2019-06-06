@@ -5,7 +5,7 @@
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <netinet/in.h>
 
-#include "../logger.h"
+#include "../utilities/logger.h"
 #include "server.h"
 
 namespace po = boost::program_options;

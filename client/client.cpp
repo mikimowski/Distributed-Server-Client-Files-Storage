@@ -17,8 +17,8 @@
 #include <sys/socket.h>
 
 #include "client.h"
-#include "../helper.h"
-#include "../logger.h"
+#include "../utilities/helper.h"
+#include "../utilities/logger.h"
 
 using std::string;
 using std::vector;

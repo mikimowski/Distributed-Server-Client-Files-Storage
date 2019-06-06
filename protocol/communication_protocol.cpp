@@ -2,7 +2,7 @@
 #include <cstring>
 #include <iostream>
 #include "communication_protocol.h"
-#include "helper.h"
+#include "../utilities/helper.h"
 
 namespace cp = communication_protocol;
 

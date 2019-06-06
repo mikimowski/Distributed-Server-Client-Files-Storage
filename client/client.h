@@ -8,7 +8,7 @@
 #include <boost/filesystem/path.hpp>
 
 #include "client_configuration.h"
-#include "../communication_protocol.h"
+#include "../protocol/communication_protocol.h"
 #include "../socket/udp_socket.h"
 #include "../socket/tcp_socket.h"
 

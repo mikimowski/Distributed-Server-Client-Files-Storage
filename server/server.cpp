@@ -18,8 +18,8 @@
 #include <bits/signum.h>
 
 #include "server.h"
-#include "../helper.h"
-#include "../logger.h"
+#include "../utilities/helper.h"
+#include "../utilities/logger.h"
 
 using std::string;
 using std::to_string;
